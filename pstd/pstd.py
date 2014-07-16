@@ -1,29 +1,23 @@
 """
 This module contains an implementation of the k-space PSTD method.
+
+This implementation uses numexpr to accelerate the array manipulations.
 """
 import numpy as np
+import numexpr as ne
 
 import logging
-logger = logging.getLogger(__name__)    # Use module name as logger name
+#logger = logging.getLogger(__name__)    # Use module name as logger name
 
 
 try:
     from pyfftw.interfaces.numpy_fft import fft2, ifft2  # Performs much better than numpy's fftpack
 except ImportError:                                    # Use monkey-patching np.fft perhaps instead?
     from numpy.fft import fft2, ifft2
+    logging.info("pyFFTW not available. Using NumPy FFT.")
 
+from .model import Model  
 
-#class AttributeDict(collections.OrderedDict):
-    #"""
-    #Dictionary that allows accessing the items through attribute-access (e.g. a.x).
-    #"""
-    #def __init__(self,**kw):
-        #dict.__init__(self,kw)
-        #self.__dict__ = self
-
-
-from model import Model    
-    
 
 def kappa(wavenumber, timestep, c):
     """
@@ -35,6 +29,7 @@ def kappa(wavenumber, timestep, c):
     .. math:: \\kappa = \\mathrm{sinc}{\\left( c_0 \\Delta t k / 2 \\right)}
     
     """
+    #return ne.evaluate("sin(c * timestep * wavenumber / 2.0) / (c * timestep * wavenumber / 2.0)")
     return np.sinc(c * timestep * wavenumber / 2.0)
 
 def to_pressure_gradient(pressure_fft, wavenumber, kappa, spacing):
@@ -51,7 +46,9 @@ def to_pressure_gradient(pressure_fft, wavenumber, kappa, spacing):
     K-space documentation Equation 2.17a as well as 
     """
     #return ifft(+1j * wavenumber * kappa * np.exp(+1j*wavenumber*spacing/2.0) * fft(pressure, axis=axis), axis=axis)
-    return (+1j * wavenumber * kappa * np.exp(+1j*wavenumber*spacing/2.0) * pressure_fft)#fft2(pressure))
+    j = 1j
+    return ne.evaluate("+j * wavenumber * kappa * exp(+j * wavenumber*spacing/2.0) * pressure_fft")
+    #return (+1j * wavenumber * kappa * np.exp(+1j*wavenumber*spacing/2.0) * pressure_fft)#fft2(pressure))
 
 
 def to_velocity_gradient(velocity_fft, wavenumber, kappa, spacing):
@@ -68,7 +65,9 @@ def to_velocity_gradient(velocity_fft, wavenumber, kappa, spacing):
     Equation 2.17c.
     """
     #return ifft(+1j * wavenumber * kappa * np.exp(-1j*wavenumber*spacing/2.0) * fft(velocity, axis=axis), axis=axis)
-    return (+1j * wavenumber * kappa * np.exp(-1j*wavenumber*spacing/2.0) * velocity_fft)
+    j = 1j
+    return ne.evaluate("+j * wavenumber * kappa * exp(-j * wavenumber*spacing/2.0) * velocity_fft")
+    #return (+1j * wavenumber * kappa * np.exp(-1j*wavenumber*spacing/2.0) * velocity_fft)
 
 
 def abs_exp(alpha, timestep):
@@ -83,7 +82,8 @@ def abs_exp(alpha, timestep):
     .. math:: e^{-\\alpha_{\\xi} \\Delta t / 2}
     
     """
-    return np.exp(alpha * -timestep / 2.0)
+    return ne.evaluate("exp(-alpha * timestep / 2.0)")
+    #return np.exp(alpha * -timestep / 2.0)
 
 def pressure_abs_exp(alpha, timestep):
     """
@@ -97,7 +97,8 @@ def pressure_abs_exp(alpha, timestep):
     .. math:: e^{-\\alpha_{\\xi} \\Delta t / 2}
     
     """
-    return np.exp(alpha * -timestep / 2.0)
+    return ne.evaluate("exp(-alpha * timestep / 2.0)")
+    #return np.exp(alpha * -timestep / 2.0)
 
 def velocity_abs_exp(alpha, timestep, spacing, wavenumber):
     """
@@ -110,8 +111,14 @@ def velocity_abs_exp(alpha, timestep, spacing, wavenumber):
     
     .. math:: e^{-\\alpha_{\\xi} \\Delta t / 2}
     
+    However, since the velocity field is shifted by half a spacing, a correction needs to be applied.
+    
+    .. math:: \\mathcal{F}^{-1} \\left[ e^{+j k_{\\xi} \\Delta \\xi / 2} \\mathcal{F} \\left( e^{-\\alpha_{\\xi} \Delta t / 2} \\right) \\right]
+        
     """
-    return ifft2(np.exp(+1j*wavenumber*spacing/2.0) * fft2(np.exp(alpha * -timestep / 2.0)) )
+    j = 1j
+    return ifft2(ne.evaluate("exp(+j * wavenumber*spacing/2.0)") * fft2(ne.evaluate("exp(-alpha * timestep / 2.0)"))) 
+    #return ifft2(np.exp(+1j*wavenumber*spacing/2.0) * fft2(np.exp(alpha * -timestep / 2.0)) )
 
 def velocity_with_pml(previous_velocity, pressure_gradient, timestep, density, abs_exp, source):
     """
@@ -129,7 +136,8 @@ def velocity_with_pml(previous_velocity, pressure_gradient, timestep, density, a
     
     Equation 2.27.
     """
-    return abs_exp * (abs_exp * previous_velocity - timestep / density * pressure_gradient  + timestep * source) 
+    return ne.evaluate("abs_exp * (abs_exp * previous_velocity - timestep / density * pressure_gradient  + timestep * source)")
+    #return abs_exp * (abs_exp * previous_velocity - timestep / density * pressure_gradient  + timestep * source) 
 
 
 def pressure_with_pml(previous_pressure, velocity_gradient, timestep, density, soundspeed, abs_exp, source):
@@ -147,7 +155,17 @@ def pressure_with_pml(previous_pressure, velocity_gradient, timestep, density, s
     .. math:: p_{\\xi}^{n+1} = e^{-\\alpha_{\\xi} \\Delta t / 2} \\left( e^{-\\alpha_{\\xi} \\Delta t / 2} u_{\\xi}^{n} - \\Delta t \\rho_0 c^2 \\frac{\\partial}{\\partial \\xi} v^n + \\Delta t S^n_{M_{\\xi}} \\right)
     
     """
-    return abs_exp * (abs_exp * previous_pressure - timestep * (density * soundspeed**2.0)  * velocity_gradient + timestep * source)
+    return ne.evaluate("abs_exp * (abs_exp * previous_pressure - timestep * (density * soundspeed**2.0)  * velocity_gradient + timestep * source)")
+    #return abs_exp * (abs_exp * previous_pressure - timestep * (density * soundspeed**2.0)  * velocity_gradient + timestep * source)
+
+
+def sync_steps(p, v, p_fft, k, kappa, spacing, timestep, density, soundspeed, abs_exp_p, abs_exp_v, source_p, source_v):
+    
+    v = velocity_with_pml(v, ifft2(to_pressure_gradient(p_fft, k, kappa, spacing)), timestep, density, abs_exp_v, source_v)
+    p = pressure_with_pml(p, ifft2(to_velocity_gradient(fft2(v), k, kappa, spacing)), timestep, density, soundspeed, abs_exp_p, source_p)
+    
+    return p, v
+
 
 #@classmethod
 def update(d):
@@ -159,62 +177,58 @@ def update(d):
     .. note:: This method should only contain calculation steps.
     
     """
-    #d_p_d_x = cls.pressure_gradient(p_x + p_y, k_x, kappa, spacing)
-    #d_p_d_y = cls.pressure_gradient(p_y + p_y, k_y, kappa, spacing)
-    
     step = d['step']
     
-    print "Step: {}".format(step)
     
-    pressure_fft = fft2(d['field']['p'])    # Apply atmospheric absorption here?
-    
-    #pressure_fft *= data['absorption']
-    
-    d['field']['v_x'] = velocity_with_pml(d['field']['v_x'], 
-                                                ifft2(to_pressure_gradient(pressure_fft, 
-                                                                    d['k_x'], d['kappa'], d['spacing'])), 
-                                                                    d['timestep'], d['density'], d['abs_exp']['v']['x'], d['source']['v']['x'][step])
-                                                                    #d['timestep'], d['density'], d['abs_exp']['x'], d['source']['v']['x'][step])
-    d['field']['v_y'] = velocity_with_pml(d['field']['v_y'], 
-                                                ifft2(to_pressure_gradient(pressure_fft,
-                                                                    d['k_y'], d['kappa'], d['spacing'])), 
-                                                                    d['timestep'], d['density'], d['abs_exp']['v']['y'], d['source']['v']['y'][step])
-                                                                    #d['timestep'], d['density'], d['abs_exp']['y'], d['source']['v']['y'][step])
-    
-    #print d['field']['v_x']
-        
-    #d_v_d_x = cls.velocity_gradient(v_x, k_x, kappa, spacing)
-    #d_v_d_y = cls.velocity_gradient(v_y, k_y, kappa, spacing)
-    
-    d['temp']['p_x'] = pressure_with_pml(d['temp']['p_x'], 
-                                                ifft2(to_velocity_gradient(fft2(d['field']['v_x']), d['k_x'], 
-                                                                    d['kappa'], d['spacing'])), d['timestep'], 
-                                                                    d['density'], d['soundspeed'], d['abs_exp']['p']['x'], d['source']['p'][step])
-                                                                    #d['density'], d['soundspeed'], d['abs_exp']['x'], d['source']['p'][step])
-    d['temp']['p_y'] = pressure_with_pml(d['temp']['p_y'], 
-                                                ifft2(to_velocity_gradient(fft2(d['field']['v_y']), d['k_y'], 
-                                                                    d['kappa'], d['spacing'])), d['timestep'], 
-                                                                    d['density'], d['soundspeed'], d['abs_exp']['p']['y'], d['source']['p'][step])
-                                                                    #d['density'], d['soundspeed'], d['abs_exp']['y'], d['source']['p'][step])
-    
-    
-    d['field']['p'] = d['temp']['p_x'] + d['temp']['p_y']
-    
-    #print "Source p: {}".format(d['source']['p'][step])
-    
-    #print "Velocity y: {}".format(d['field']['v_y'])
-    
-    #print "Pressure total: {}".format(d['field']['p'])    
+    # Calculate FFT of pressure
+    pressure_fft = fft2(d['field'][('pressure', None)])    # Apply atmospheric absorption here?
 
+    #out_x = d['executor'].submit(sync_steps, d['temp']['p_x'], d['field'][('velocity', 'x')], pressure_fft, d['k_x'], 
+                            #d['kappa'], d['spacing'], d['timestep'], d['density'], d['soundspeed'], 
+                            #d['abs_exp']['p']['x'], d['abs_exp']['v']['x'], d['source'][('pressure', None)], d['source'][('velocity', 'x')])
+
+    #out_y = d['executor'].submit(sync_steps, d['temp']['p_y'], d['field'][('velocity', 'y')], pressure_fft, d['k_y'], 
+                            #d['kappa'], d['spacing'], d['timestep'], d['density'], d['soundspeed'], 
+                            #d['abs_exp']['p']['y'], d['abs_exp']['v']['y'], d['source'][('pressure', None)], d['source'][('velocity', 'y')])
+
+    #out_x = out_x.result()
+    #out_y = out_y.result()
+        
+    out_x = sync_steps(d['temp']['p_x'], d['field'][('velocity', 'x')], pressure_fft, d['k_x'], 
+                                d['kappa'], d['spacing'], d['timestep'], d['density'], d['soundspeed'], 
+                                d['abs_exp']['p']['x'], d['abs_exp']['v']['x'], d['source'][('pressure', None)], d['source'][('velocity', 'x')])
+
+    out_y = sync_steps(d['temp']['p_y'], d['field'][('velocity', 'y')], pressure_fft, d['k_y'], 
+                                d['kappa'], d['spacing'], d['timestep'], d['density'], d['soundspeed'], 
+                                d['abs_exp']['p']['y'], d['abs_exp']['v']['y'], d['source'][('pressure', None)], d['source'][('velocity', 'y')])
+
+    d['temp']['p_x'], d['field'][('velocity', 'x')] = out_x
+    d['temp']['p_y'], d['field'][('velocity', 'y')] = out_y
+
+    d['field'][('pressure', None)] = d['temp']['p_x'] + d['temp']['p_y']
+    
+    return d
+ 
 
 class PSTD(Model):
     """
     K-space Pseudo Spectral Time-Domain model.
     """
     
-    FIELD_ARRAYS = ['p', 'v_x', 'v_y']
+    FIELD_ARRAYS = [('pressure', None), 
+                    ('velocity', 'x'),
+                    ('velocity', 'y'),
+                    ]
+                    #('velocity', ('x', 'y'))]
     
     _update = staticmethod(update)
+    
+    ##fft_wisdom_forward = None
+    ##"""FFTW wisdom file for forward transform.
+    ##"""
+    ##fft_wisdom_backward = None
+    ##"""FFTW wisdom file for backward transform.
+    ##"""
     
     @staticmethod
     def stability_criterion(CFL, c_0, c_ref):
@@ -230,9 +244,23 @@ class PSTD(Model):
         """
         return CFL <= 2.0 / np.pi * (c_0 / c_ref) * np.arcsin(c_ref/c_0)
 
-    def _pre_run(self, data):
+
+    #def _pre_run(self, data):
         
-        super(PSTD, self)._pre_run(data)
+        #super()._pre_run(data)
+        #data['executor'] = ProcessPoolExecutor(max_workers=2)
+        #return data             
+                     
+    #def _post_run(self, data):
+        #data['executor'].shutdown()
+        #super()._post_run(data)
+        #return data
+
+    def _pre_start(self, data):
+        
+        data = super()._pre_start(data)
+        
+        #print (data)
         
         data['k_x'], data['k_y'] = np.meshgrid(self.axes.x.wavenumbers, self.axes.y.wavenumbers, indexing='ij')
         data['k_x'] = data['k_x'].astype(self.dtype('float'))
@@ -255,14 +283,9 @@ class PSTD(Model):
         data['shape'] = self.grid.shape
         
         data['temp'] = dict()
-        data['temp']['p_x'] = np.zeros_like(data['field']['p'])
-        data['temp']['p_y'] = np.zeros_like(data['field']['p'])
+        data['temp']['p_x'] = np.zeros_like(data['field'][('pressure', None)])
+        data['temp']['p_y'] = np.zeros_like(data['field'][('pressure', None)])
+
         
-        
-        #from acoustics.atmosphere import Atmosphere
-        #atm = Atmosphere()
-        #L_alpha = atm.attenuation_coefficient(self._frequencies)
-        #data['absorption'] = 10.0**(-L_alpha/20.0)
-        
-        
-    
+        return data
+

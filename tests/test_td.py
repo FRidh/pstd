@@ -1,43 +1,9 @@
 import unittest
 import numpy as np
 
-from acoustics.td.pstd import PSTD
-from acoustics.td.model import Medium, Source, Receiver, Position2D, PML
+from pstd import PSTD, Medium, Source, Receiver, Position2D, PML
 
 from numpy.testing import assert_array_almost_equal
-
-from acoustics.td.model import decibel_to_neper, neper_to_decibel, ir2fr
-
-class Utilities(unittest.TestCase):
-    
-    
-    def test_decibel_to_neper(self):
-        self.assertEqual(decibel_to_neper(1.0), 0.11512925464970229)
-    
-    
-    def test_neper_to_decibel(self):
-        self.assertEqual(neper_to_decibel(1.0), 8.685889638065035)
-      
-    
-    def test_ir2fr(self):
-        """
-        Test whether the frequency vector is correct.
-        """
-        
-        t = 1.0
-        fs = 100.0
-        f = 20.0
-        ts = np.arange(0, t, 1./fs)
-        
-        A = 5.0
-        
-        x = A * np.sin(2. * np.pi * f * ts)
-        
-        fv, fr = ir2fr(x, fs)
-        
-        self.assertEqual(fv[np.abs(fr).argmax()], f)
-
-        self.assertAlmostEqual(np.abs(fr).max(), A)
 
 #import acoustics.td.pstd
 #import acoustics.td.pstd_using_cuda

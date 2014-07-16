@@ -17,27 +17,33 @@ This section contains a description of all classes and functions.
 Model
 =====
 
+**********
+Base class
+**********
+
 .. autoclass:: pstd.model.Model
     :show-inheritance:
     :members:
     :exclude-members: grid, pml, axes
+
+.. autofunction:: pstd.model.DEFAULT_SETTINGS   
     
 *************
 Grid and axes
 *************
-.. autoclass:: pstd.Grid
+.. autoclass:: pstd.model.Grid
     :show-inheritance:
     :members:
-.. autoclass:: pstd.Axes
+.. autoclass:: pstd.model.Axes
     :show-inheritance:
     :members:
-.. autoclass:: pstd.Axes2D
+.. autoclass:: pstd.model.Axes2D
     :show-inheritance:
     :members:
-.. autoclass:: pstd.Axes3D
+.. autoclass:: pstd.model.Axes3D
     :show-inheritance:
     :members:
-.. autoclass:: pstd.Axis
+.. autoclass:: pstd.model.Axis
     :show-inheritance:
     :members:
 
@@ -45,37 +51,34 @@ Grid and axes
 Sources and receivers
 *********************
 
-.. autoclass:: pstd.Source
+.. autoclass:: pstd.model.Source
     :show-inheritance:
     :members:
-.. autoclass:: pstd.Receiver
+.. autoclass:: pstd.model.Receiver
     :show-inheritance:
     :members:
     
 ******
 Medium
 ******
-.. autoclass:: pstd.Medium
+.. autoclass:: pstd.model.Medium
     :show-inheritance:
     :members:
     
 ********
 Position
 ********
-.. autoclass:: pstd.Position
+.. autoclass:: pstd.model.Position
     :show-inheritance:
     :members:
-.. autoclass:: pstd.Position2D
-    :show-inheritance:
-    :members:
-.. autoclass:: pstd.Position3D
+.. autoclass:: pstd.model.Position2D
     :show-inheritance:
     :members:
         
 **********************
 Pefectly Matched Layer
 **********************
-.. autoclass:: pstd.PML
+.. autoclass:: pstd.model.PML
     :show-inheritance:
     :members:
     
@@ -83,26 +86,14 @@ Pefectly Matched Layer
 Functions
 =========
 
-.. autofunction:: pstd.CFL
+.. autofunction:: pstd.model.cfl
 
-.. autofunction:: pstd.frequencies
+.. autofunction:: pstd.model.frequencies
 
-.. autofunction:: pstd.wavenumbers
+.. autofunction:: pstd.model.wavenumbers
 
-.. autofunction:: pstd.initial_pressure_pulse
+.. autofunction:: pstd.model.circular_receiver_array
 
-.. autofunction:: pstd.ir2fr
-
-.. autofunction:: pstd.circular_receiver_array
-
-
-***********
-Conversions
-***********
-
-.. autofunction:: pstd.decibel_to_neper
-
-.. autofunction:: pstd.neper_to_decibel
 
 ==================
 Models and kernels
@@ -121,7 +112,7 @@ k-space PSTD
     :show-inheritance:
     :members:
 
-.. autoclass:: pstd.pstd_using_numba.PSTD_using_numba
+.. autoclass:: pstd.pstd_using_numba.PSTD
     :show-inheritance:
     :members:
 

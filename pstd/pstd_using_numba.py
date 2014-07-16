@@ -3,12 +3,7 @@ This module contains a Numba-accelerated implementation of the k-space PSTD meth
 """
 
 import numba
-import pstd
-
-try:
-    import numba
-except ImportError:
-    raise ImportWarning("Cannot import numba. JIT not available.")
+from . import pstd
 
 kappa = numba.autojit(pstd.kappa)
 #abs_exp = numba.autojit(pstd.abs_exp)
@@ -20,7 +15,7 @@ to_pressure_gradient = numba.autojit(pstd.to_pressure_gradient)
 to_velocity_gradient = numba.autojit(pstd.to_velocity_gradient)
 update = numba.autojit(pstd.update)
 
-class PSTD_using_numba(pstd.PSTD):
+class PSTD(pstd.PSTD):
     
     _update = staticmethod(update)
     

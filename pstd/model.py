@@ -3,60 +3,61 @@ This module contains an implementation of the k-space PSTD method.
 """
 import yaml
 import numpy as np
-#import scipy.sparse as sp
 import abc
-import six
 import collections
 import time
 import datetime
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import AxesGrid, make_axes_locatable
+import weakref
+import itertools
+from acoustics import Signal
+
 
 import logging
-logger = logging.getLogger(__name__)    # Use module name as logger name
+#logging = logging.getLogger(__name__)    # Use module name as logging name
 
-import h5py
+#import h5py
+from acoustics.signal import ir2fr
 
-try:
-    import numba
-except ImportError:
-    raise ImportWarning("Cannot import numba. JIT not available.")
+#try:
+    #import numba
+#except ImportError:
+    #raise ImportWarning("Cannot import numba. JIT not available.")
 
-try:
-    from pyfftw.interfaces.numpy_fft import rfft
-except ImportError:
-    from numpy.fft import rfft
+#try:
+    #from pyfftw.interfaces.numpy_fft import rfft
+#except ImportError:
+    #from numpy.fft import rfft
 
-#from sparse import SparseArray # as SparseArray
-from sparse_cython.core import SparseArray
-#from numpy import ndarray as SparseArray
+#from sparse_cython.core import SparseArray
 
 #from multiprocessing import cpu_count
 
-class SparseList(dict):
-    """
-    Sparse list.
+#class SparseList(dict):
+    #"""
+    #Sparse list.
     
-    .. note:: Quick implementation. Better approach would be to encapulse the dictionary.
+    #.. note:: Quick implementation. Better approach would be to encapulse the dictionary.
     
-    """
+    #"""
     
-    def __init__(self, length, default=0.0):
+    #def __init__(self, length, default=0.0):
         
-        self._length = length
-        self._default = default
+        #self._length = length
+        #self._default = default
     
-    def __getitem__(self, i):
-        if i >= self._length:
-            raise IndexError("Out of range.")
-        else:
-            try:
-                return dict.__getitem__(self, i)
-            except KeyError:
-                return self._default
+    #def __getitem__(self, i):
+        #if i >= self._length:
+            #raise IndexError("Out of range.")
+        #else:
+            #try:
+                #return dict.__getitem__(self, i)
+            #except KeyError:
+                #return self._default
 
-    def __len__(self):
-        return self._length
+    #def __len__(self):
+        #return self._length
     
 #def _correct_index(i, s):
     #"""
@@ -114,11 +115,35 @@ class ReverseReference(object):
         setattr(value, self.remote, instance) 
     
     
-    
-@six.add_metaclass(abc.ABCMeta)
-class Axes(object):
+class Name(object):
     """
-    Axes
+    Unique Name descriptor.
+    """
+    
+    #def __init__(self):
+        #pass
+    
+    def __get__(self, instance, owner):
+        try:
+            return instance.__dict__['name']
+        except KeyError:
+            return None
+        
+    def __set__(self, instance, value):
+        if instance.name is None:
+            """Set unique name."""
+            names = (obj.name for obj in instance.model.objects)
+            if value in names:
+                msg = 'Name {} is not unique.'.format(str(value))
+                warnings.warn(msg, Warning)
+                value += '1'
+            instance.__dict__['name'] = value
+        else:
+            raise ValueError("Cannot change name.")
+        
+
+class Axes(object, metaclass=abc.ABCMeta):
+    """Axes base class.
     """
 
     _model = None
@@ -156,27 +181,20 @@ class Axes(object):
         return len(self)
     
 class Axes2D(Axes):
-    """
-    Axes for two-dimensional model.
+    """Axes for two-dimensional model.
     """
     
     DIMENSIONS = ['x', 'y']
 
 class Axes3D(Axes):
-    """
-    Axes for three-dimensional model.
+    """Axes for three-dimensional model.
     """
     
     DIMENSIONS = ['x'], ['y'], ['z']
 
 
-#XY = collections.namedtuple('XY', ['x', 'y'])
-#XYZ = collections.namedtuple('XYZ', ['x', 'y', 'z'])
-
-
 class Axis(object):
-    """
-    Axis of :class:`Model`.
+    """Axis of :class:`Model`.
     """
 
     def __init__(self, axes, label, length=0.0):
@@ -263,123 +281,64 @@ class Axis(object):
             #length = self.length_target
         #return int(np.ceil(length/self.spacing))    
         #return int(np.ceil(self.length_target / self.spacing))
-    
-    ###@property
-    ###def nodes_with_pml(self):
-        ###"""
-        ###Amount of grid points along this axis, including PML nodes.
-        ###"""
-        ###return self.nodes + 2 * self._axes._model.pml.nodes
-    
-    
+        
     @property
     def wavenumbers(self):
         """
         Wavenumbers.
         """
         return wavenumbers(self.nodes, self.spacing).astype(self._axes._model.dtype('float'), copy=False)
-    
-@six.add_metaclass(abc.ABCMeta)
-class Position(object):
-    """
-    Position/Coordinate of :class:`Source` or :class:`Receiver`.
-    
-    .. note:: Replace with ``Point`` from Geometry module?
-    
-    """
-    
-    DIMENSIONS = []
-    
-    def __iter__(self):
-        for i in self.DIMENSIONS:
-            yield getattr(self, i)
-        #yield self.x
-        #yield self.y
-        #yield self.z
-
-    def __len__(self):
-        return len(self.DIMENSIONS)
-    
-    def __getitem__(self, i):
-        return getattr(self, self.DIMENSIONS[i])
-        #if i==0:
-            #return self.x
-        #elif i==1:
-            #return self.y
-        #elif i==2:
-            #return self.z
-        #else:
-            #raise IndexError()
-
-    def __setitem__(self, i, val):
-        setattr(self, self.DIMENSIONS[i], val)
-        #if i==0:
-            #self.x = val
-        #elif i==1:
-            #self.y = val
-        #elif i==2:
-            #self.z = val
-        #else:
-            #raise IndexError()
-
-class Position2D(Position):
-    """
-    Position in 2D.
-    """
-    
-    DIMENSIONS = ['x', 'y']
-    
-    def __init__(self, x, y):
-        self.x = x
-        """
-        x
-        """
-        self.y = y
-        """
-        y
-        """
-
-    def __str__(self):
-        return "Position2D({:.2f}, {:.2f})".format(self.x, self.y)
 
 
-###class Position3D(Position):
-    ###"""
-    ###Position in 3D.
-    ###"""
-    
-    ###DIMENSIONS = ['x', 'y', 'z']
-    
-    ###def __init__(self, x, y, z):
-        ###self.x = x
-        ###"""
-        ###x
-        ###"""
-        ###self.y = y
-        ###"""
-        ###y
-        ###"""
-        ###self.z = z
-        ###"""
-        ###z
-        ###"""
+Position2D = collections.namedtuple("Position2D", ['x', 'y'])
+"""Position in 2D
+"""
 
-    ###def __str__(self):
-        ###return "Position3D({}, {}, {})".format(self.x, self.y, self.z)
+Position3D = collections.namedtuple("Position3D", ['x', 'y', 'z'])
+"""Position in 3D
+"""
 
-
-@six.add_metaclass(abc.ABCMeta)
 class Transducer(object):
     
-    _model = None
-    
-    def __init__(self, position):
+    #name = Name()
+    #"""
+    #Unique name of object.
+    #"""
         
+    def __init__(self, model, name, position):
+        
+        #super().__init__()
+        
+        self._model = model
+        """
+        Reference to model.
+        """
+        
+        self.name = name
         
         self.position_target = position
+        
+    def _start(self):
         """
-        Position of the source. See :class:`Position`.
+        Method is called when a new simulation is started to do some preparations.
         """
+        
+        self._position_in_nodes = self.position_in_nodes
+        """
+        Position in nodes. Static value that is updated during pre-run.
+        """
+    
+    @property
+    def position_target(self):
+        """Position (center) of the source. See :class:`Position`.
+        """
+        return self._position
+        
+    @position_target.setter
+    def position_target(self, position):
+        self._position = Position2D(*position)
+    
+    
     @property
     def position(self):
         """
@@ -390,7 +349,6 @@ class Transducer(object):
             return self.position_with_pml
         else:
             return self.position_without_pml
-        
         
     @property
     def position_with_pml(self):
@@ -429,7 +387,6 @@ class Transducer(object):
         spacing = self._model.grid.spacing
         return tuple(int(round(x/spacing)) for x in self.position_target)
        
-    
     @property
     def position_in_nodes_with_pml(self):
         """
@@ -438,14 +395,11 @@ class Transducer(object):
         pml = self._model.pml.nodes
         
         return tuple(x+pml for x in self.position_in_nodes_without_pml)
-        
         #return tuple(int(round(x/spacing))+pml for x in self.position_target)
        
-    
-    
+
 def mass(pressure, c, spacing, ndim):
-    """
-    Mass.
+    """Mass.
     
     :param pressure: Sound pressure
     :param c: Speed of sound
@@ -458,9 +412,9 @@ def mass(pressure, c, spacing, ndim):
     """
     return pressure * 2.0 / (c * ndim * spacing)
 
+
 def force(velocity, c, spacing):
-    """
-    Force.
+    """Force.
     
     :param velocity: Particle velocity.
     :param c: Speed of sound.
@@ -473,91 +427,73 @@ def force(velocity, c, spacing):
     return velocity * 2.0 * c / spacing
   
 
-@six.add_metaclass(abc.ABCMeta)
-class Source(object):
-    """
-    Source
+class Source(Transducer):
+    """Source
     """
     
-    def __init__(self, quantity, component=None):
+    _field_generator = None
+    """
+    Generator that is used during the simulation. See :meth:`_start`.
+    """
+    
+    def __init__(self, model, name, position, quantity, component=None):
+        
+        super().__init__(model, name, position)
         
         self.quantity = quantity
-        """
-        Quantity of source. Pressure or velocity.
+        """Quantity of source. Pressure or velocity.
         """
         
-        if self.quantity == 'velocity':
-            if self.component:
-                self.component = component
-            else:
-                raise ValueError("Need argument component for velocity source.")
+        self.component = component
+        """Component of field quantity.
+        """
         
-
+    @abc.abstractmethod    
+    def _field(self):
+        """
+        Source field generator.
+        
+        This generator yields every timestep a scalar or array.
+        """
+        yield
+    
+    def _start(self):
+        super()._start()
+        self._field_generator = self._field()
+        
 #class FieldSource(object):
     #"""
     #Custom source field.
     #"""
-    
     #def __init__(self, quantity, field, component=None):
-        
         #super(Field, self).__init__(self, quantity, field)
-
         #self.field = field
 
-
-class PointSource(Source, Transducer):
+class PointSource(Source):
     """
     Point source.
     """
     
-    def __init__(self, position, quantity, component=None, excitation='pulse', amplitude=None, frequency=None):
+    def __init__(self, model, name, position=None, quantity=None, component=None, excitation='pulse', amplitude=None, frequency=None):
         
-        Transducer.__init__(self, position)
-        Source.__init__(self, quantity, component)
+        super().__init__(model, name, position, quantity, component)
 
         self.excitation = excitation
+        """Type of excitation. Options are `'sine'` and `'pulse'`.
+        """
         
         self.amplitude = amplitude
         
         self.component = component
+        """Component of field ('x', 'y').
+        """
         
-        
-        
-        #if excitation=='sine':
         self.frequency = frequency
-
-    #@field.setter
-    #def field(self, field):
-        #self._field = field
-        #self.excitation = 'custom'
-    
-    #@field.deleter
-    #def field(self):
-        #self._field = None
-        #self.excitation = None
-        
-    @property
-    def field(self):
+        """Frequency of signal in case of a sine excitation.
         """
-        Field.
-        """
-        
-        if self.excitation=='sine':
-            return self._field_sine()
-        elif self.excitation=='pulse':
-            return self._field_pulse()
-        elif self.excitation=='custom':
-            return self._field_custom()
-        else:
-            raise ValueError("Excitation type is not specified.")
 
-    #@property
-    #def _shape(self):
-        #shape = list(self._model.grid.shape)
-        #shape.insert(0, self._model.timesteps)
-        #return tuple(shape)
         
-    def _converted_amplitude(self):
+    def _amplitude(self):
         if self.quantity=='pressure':
             return self.mass
         elif self.quantity=='velocity':
@@ -565,105 +501,7 @@ class PointSource(Source, Transducer):
         else:
             raise ValueError("Incorrect quantity.")
         
-    def _field_sine(self):
-        """
-        Field in space and time due to sine wave excitation.
-        """
-        if not self.frequency:
-            raise ValueError("Frequency of sine source is not specified.")
 
-        model = self._model
-        shape = model.shape_spacetime
-        timestep = model.timestep
-        timesteps = model.timesteps
-        position = self.position_in_nodes
-        
-        field = SparseArray(shape, dtype=model.dtype('float'))
-        
-        times = np.arange(timesteps) * timestep
-        
-        amplitude = self._converted_amplitude()
-        
-        signal = amplitude * np.sin(2.0 * np.pi * self.frequency * times)
-        #print len(signal)
-        #field[:,position] = signal
-        # Workaround since SparseArray does not support assigning a sequence.
-        #print position[0], position[1]
-        for i, v in enumerate(signal):
-            #print i, v
-            field[(i, position[0], position[1])] = v
-        #print field._data
-        return field
-        
-    def _field_custom(self):
-        """
-        Custom emission signal.
-        """
-        signal = self._converted_amplitude
-        
-        if len(signal) != self._model.timesteps:
-            raise ValueError("Signal length does not match the model timesteps.")
-        
-        field = SparseArray(self._model.shape_spacetime, dtype=model.dtype('float'))
-        field[:, position] = signal
-        return field
-    
-    def _field_pulse(self):
-        """
-        Field in space and time due to sine wave excitation.
-        """
-        model = self._model
-        shape = model.shape_spacetime
-        timestep = model.timestep
-        timesteps = model.timesteps
-        position = self.position_in_nodes
-        amplitude = self._converted_amplitude()
-        
-        #field = SparseArray(shape, dtype=model.dtype('float'))
-        field = SparseList(length=timesteps, default=0.0)
-        
-        spacing = self._model.grid.spacing      # Grid spacing
-        
-        # We now calculate a small pulse, and then fit it in
-        pulse = self.gaussian_pulse(amplitude, spacing)  # Small pulse
-        shape = pulse.shape
-        offset = tuple(int(round(i/2.0)) for i in shape)
-        position = self.position_in_nodes
-        
-        #pulse_grid = SparseArray(shape=model.grid.shape, dtype=model.dtype('float'))
-        pulse_grid = np.zeros(self._model.grid.shape, dtype=self._model.dtype('float'))   # Grid
-        pulse_grid[ position[0]-offset[0]: position[0]-offset[0]+shape[0], position[1]-offset[1] : position[1]-offset[1]+shape[1] ] = pulse
-        
-        #field[0,:,:] = pulse_grid # 
-        # Workaround since SparseArray does not support assigning a sequence.
-        #for i, v in np.ndenumerate(pulse_grid):
-            #field[0, i[0], i[1]] = v
-        field[0] = pulse_grid
-        return field
-        
-    #@staticmethod
-    #def gaussian_pulse(position, amplitude, spacing, shape=(16,16), a=0.3):
-        #"""
-        #Create initial pulse.
-        
-        #:param position: Iterator containing indices of source position.
-        #:param amplitude: Energy in the pulse. :math:`A`.
-        #:param shape: Shape of the grid.
-        #:param spacing: Grid spacing.
-        
-        #.. math:: g = a \\left( \\frac{1}{\\Delta x} \\right)^2
-        
-        #.. math:: p = A e^{ -g \\sum_{i=0}^n \\left(x_i - x_{p,i}\\right)^2  }
-        
-        #.. note:: Cut of the exponential. Then the source terms can be stored as sparse arrays.
-        
-        #"""
-        #g = a * (1.0/spacing)**2.0
-        #vectors = [np.arange(1, n+1) * spacing for n in shape]
-        #grids = np.meshgrid(*vectors, indexing='ij')
-        #pulse = amplitude * np.exp( -g * sum([(grid - pos)**2.0 for grid, pos in zip(grids, position)]) )
-        #return pulse
-       
     @staticmethod
     def gaussian_pulse(amplitude, spacing, shape=(15,15), a=0.3):
         """
@@ -686,9 +524,7 @@ class PointSource(Source, Transducer):
         grids = np.meshgrid(*vectors, indexing='ij')
         pulse = amplitude * np.exp( -g * sum([(grid - pos)**2.0 for grid, pos in zip(grids, position)]) )
         return pulse
-       
-       
-       
+        
     @property
     def mass(self):
         """
@@ -702,7 +538,9 @@ class PointSource(Source, Transducer):
                 return float(m)
             except TypeError:
                 return m
-    
+        else:
+            raise ValueError("This is not a pressure/mass source.")
+        
     @property  
     def force(self):
         """
@@ -716,7 +554,9 @@ class PointSource(Source, Transducer):
                 return float(f)
             except TypeError:
                 return f
-            
+        else:
+            raise ValueError("This is not a velocity/force source.")
+        
     def _attributes(self):
 
         source_fields = ['position', 'position_with_pml', 'position_without_pml', 
@@ -725,176 +565,143 @@ class PointSource(Source, Transducer):
                          'frequency', 'mass', 'force']        
     
         return { item : getattr(self, item) for item in source_fields}
+
+    def _field(self):
+        """
+        Field.
+        """
+        if self.excitation=='sine':
+            yield from self._field_sine()
+        elif self.excitation=='pulse':
+            yield from self._field_pulse()
+        #elif self.excitation=='custom':
+            #yield from self._field_custom()
+        else:
+            raise ValueError("Excitation type is not specified.")
+
+    def _field_sine(self):
+        """
+        Sinusoidal signal.
         
-#class Excitation(object):
-    #pass
-
-
-#@six.add_metaclass(abc.ABCMeta)
-#class Source(Transducer):
-    #"""
-    #Source
-    #"""
-    
-    #def __init__(self, position, amplitude, excitation=None):
+        This is a generator returning a sinusoidal with frequency :attr:`frequency`.
         
-        #super(Source, self).__init__(position)
+        """
+        position = self.position_in_nodes
+        shape = self._model.grid.shape
+        amplitude = self._amplitude()
+        timestep = self._model.timestep
+        frequency = self.frequency
+        dtype = self._model.dtype('float')
         
-        #excitation = excitation if excitation else Pulse()
+        i = 0
+        while True:
+            time = i * timestep
+            field = np.zeros(shape, dtype=dtype)
+            field[(position[0], position[1])] = amplitude * np.sin(2.0*np.pi*frequency * time)
+            yield field
+            i+=1
         
-    #@abc.abstractmethod
-    #def field(self):
-        #pass
+    def _field_pulse(self):
+        """
+        Gaussian pulse at :math:`t=0`.
+        
+        This is a generator returning a pulse at :math:`t=0` and 0 for all other times.
+        
+        """
+        position = self.position_in_nodes
+        amplitude = self._amplitude()
+        spacing = self._model.grid.spacing      # Grid spacing
+        
+        # We now calculate a small pulse, and then fit it in
+        pulse = self.gaussian_pulse(amplitude, spacing)  # Small pulse
+        shape = pulse.shape
+        offset = tuple(int(round(i/2.0)) for i in shape)
+        
+        pulse_grid = np.zeros(self._model.grid.shape, dtype=self._model.dtype('float'))   # Grid
+        try:
+            pulse_grid[ position[0]-offset[0]: position[0]-offset[0]+shape[0], position[1]-offset[1] : position[1]-offset[1]+shape[1] ] = pulse
+        except ValueError:
+            raise ValueError("Source is too close to the border. Cannot fit Gaussian pulse.")
+        
+        yield pulse_grid
+        while True:
+            yield 0.0
 
+class Receiver(Transducer):
+    """
+    Receiver.
+    """
 
-
-#class Pressure(Source):
-    #"""
-    #Pressure source.
-    #"""
-    
-    #@property
-    #def mass(self):
+    def __init__(self, model, name, position, quantity='pressure', component=None, last_value_only=False, filename=None):
+        
+        super().__init__(model, name, position)
+        
+        self.last_value_only = last_value_only
+        """
+        Record only the final value (True) or the impulse response (False).
+        """
+        
+        self.quantity = quantity
+        """Quantity to record.
+        """
+        
+        self.component = component
+        """Field component to record.
+        """
+        
+        self._data = list()
+        """Store received values. This value will be reset 
+        whenever the simulation is restarted.
+        """
+        
+        #self.quantities = quantities if quantities else ['pressure']
+        """
+        List of quantities to record.
+        """
+        
+        
+        #self.filename = filename
         #"""
-        #Mass contribution.
-        
-        #See :func:`mass`.
+        #Store in file.
         #"""
-        #return mass(self.amplitude, self._model.medium.soundspeed_mean, self._model.grid.spacing, self._model.ndim)
-    
-    
-    #def field(self):
         
-        #return self.excitation._field(self)
-    
-#class Velocity(Source):
-    #"""
-    #Velocity source.
-    #"""
-    
-    #def __init__(self, position, amplitude, excitation=None, component=None):
+        #self._data = dict()
+        """
+        "Recorded" data.
+        """
         
-        #super(Velocity, self).__init__(self, 
-    
-    #@property  
-    #def force(self):
+        #self.store = store
         #"""
-        #Force contribution. Returns a tuple where each element represents the component of the force in the respective dimension.
-        
-        #See :func:`force`.
+        #Store data.
         #"""
-        #return tuple(force(velocity, self._model.medium.soundspeed_mean, self._model.grid.spacing) for velocity in self.amplitude)
-        
 
-    #def field(self):
-        
-        #return tuple(self.excitation._field(self) for force_component in self.force)
+    ##def store(self, data):
+        ##"""
+        ##Select and store data.
+        ##"""
+        ##for q in quantities:
+            ##self.data[q] = data['field'][q]
 
 
-#@six.add_metaclass(abc.ABCMeta)
-#class Excitation(object):
-    #"""
-    #Excitation.
-    #"""
+    def _start(self):
+        super()._start()
+        #self.data = {quantity: list() for quantity in self.quantities}
+        self._data = list()
     
-    #def __init__(self):
-        #pass
-
-#class Pulse(Excitation):
-    #"""
-    #Pulse excitation.
-    #"""
-    
-    #def __init__(self):
-        #super(Pulse, self).__init__()
-    
-    #def _initial_pulse(self, amplitude):
-        #"""
-        #Calculate the initial pulse.
-        #"""
+    def _attributes(self):
+        receiver_fields = ['position', 'position_with_pml', 'position_without_pml', 
+                         'position_in_nodes', 'position_in_nodes_with_pml', 'position_in_nodes_without_pml',
+                         'quantities', 'last_value_only']
         
-        #spacing = self._model.grid.spacing      # Grid spacing
-        #pulse = self.gaussian_pulse(amplitude, spacing)  # Pulse
-        #shape = pulse.shape
-        #offset = tuple(int(round(i/2.0)) for i in shape)
-        #position = self.position_in_nodes
-        
-        #grid = np.zeros(self._model.grid.shape, dtype=self._model.dtype('float'))   # Grid
-        #grid[ position[0]-offset[0]: position[0]-offset[0]+shape[0], position[1]-offset[1] : position[1]-offset[1]+shape[1] ] = pulse
-        
-        #return grid
-
-    #def _field(self, amplitude, timestep, timesteps):
-        #pass
+        return { item : getattr(self, item) for item in receiver_fields}
     
     
-    #@staticmethod
-    #def gaussian_pulse(amplitude, spacing, shape=(15,15), a=0.3):
-        #"""
-        #Create initial pulse.
-        
-        #:param amplitude: Energy in the pulse. :math:`A`.
-        #:param spacing: Grid spacing.
-        #:param shape: Shape of the grid.
-        #:param a: Sharpness
-        
-        #.. math:: g = a \\left( \\frac{1}{\\Delta x} \\right)^2
-        
-        #.. math:: p = A e^{ -g \\sum_{i=0}^n \\left(x_i - x_{p,i}\\right)^2  }
-        
-        #"""
-        #position = tuple( spacing * int(round(i/2.0)) for i in shape)
-        
-        #g = a * (1.0/spacing)**2.0
-        #vectors = [np.arange(1, n+1) * spacing for n in shape]
-        #grids = np.meshgrid(*vectors, indexing='ij')
-        #pulse = amplitude * np.exp( -g * sum([(grid - pos)**2.0 for grid, pos in zip(grids, position)]) )
-        #return pulse
-
-#class Sine(Excitation):
-    #"""
-    #Sine excitation.
-    #"""
+    def recording(self):
+        """Get recording.
+        """
+        return Signal(self._data, fs=self._model.temporal_sample_frequency)
+            
     
-    #def __init__(self, amplitude, frequency):
-        #super(Pulse, self).__init__()
-        #self.frequency = frequency
-        #"""
-        #Frequency of the sine excitation.
-        #"""
-    
-    #def _signal(self, times):
-        #return self.amplitude * np.sin(2.0 * np.pi * self.frequency * times)
-    
-    #def _field(self, source):
-        
-        #amplitude = self.amplitude
-        #model = source._model
-        
-        #timestep = model.timestep
-        #timesteps = model.timesteps
-        #grid_shape = model.grid.shape
-        #position = source.position_in_nodes
-        
-        #shape = tuple(list(grid_shape).insert(0, timesteps))
-        #field = SparseArray(shape, dtype=model.dtype('float'))
-        
-        #times = np.arange(timesteps, timestep)
-        #signal = source.amplitude * np.sin(2.0 * np.pi * self.frequency * times)
-        
-        #field[:,position] = signal
-        
-        #return field
-    
-#class Custom(Excitation):
-    
-    #def __init__(self):
-        #super(Pulse, self).__init__()
-        
-    
-    #def _field(self, source):
-        #pass
-
 class ReceiverArray(object):
     """
     Receiver array.
@@ -902,7 +709,7 @@ class ReceiverArray(object):
     
     def __init__(self, quantities=None, last_value_only=False, filename=None):
         
-        self.quantities = quantities if quantities else ['p']
+        self.quantities = quantities if quantities else ['pressure']
         """
         List of quantities to record.
         """
@@ -928,65 +735,13 @@ class ReceiverArray(object):
         pass
     
     
+objects_map = {"PointSource" : PointSource,
+               "Receiver"    : Receiver,
+               }    
+"""
+Map with transducers.
+"""
     
-    
-
-class Receiver(Transducer):
-    """
-    Receiver.
-    """
-    
-    _position_in_nodes = None
-    """
-    Position in nodes. Static value that is updated during pre-run.
-    """
-    
-    def __init__(self, position, quantities=None, last_value_only=False, filename=None):
-        
-        super(Receiver, self).__init__(position)
-        
-        self.last_value_only = last_value_only
-        """
-        Record only the final value (True) or the impulse response (False).
-        """
-        
-        self.quantities = quantities if quantities else ['p']
-        """
-        List of quantities to record.
-        """
-        
-        #self.filename = filename
-        #"""
-        #Store in file.
-        #"""
-        
-        self.data = dict()
-        """
-        "Recorded" data.
-        """
-        
-        #self.store = store
-        #"""
-        #Store data.
-        #"""
-
-    ##def store(self, data):
-        ##"""
-        ##Select and store data.
-        ##"""
-        ##for q in quantities:
-            ##self.data[q] = data['field'][q]
-
-    
-    def _attributes(self):
-        receiver_fields = ['position', 'position_with_pml', 'position_without_pml', 
-                         'position_in_nodes', 'position_in_nodes_with_pml', 'position_in_nodes_without_pml',
-                         'quantities', 'last_value_only']
-        
-        return { item : getattr(self, item) for item in receiver_fields}
-                
-    
-
 
 class Medium(object):
     """
@@ -995,7 +750,7 @@ class Medium(object):
     See also :class:`acoustics.atmosphere.Atmosphere`.
     """
     
-    def __init__(self, soundspeed, density):#, refractive_index=1.0):
+    def __init__(self, soundspeed=343.0, density=1.296):#, refractive_index=1.0):
         
         self.soundspeed = soundspeed
         """
@@ -1008,6 +763,8 @@ class Medium(object):
         """
         Density :math:`\\rho`.
         """    
+    
+        self._model =  None
     
     @property
     def soundspeed_mean(self):
@@ -1033,7 +790,10 @@ class Medium(object):
         except TypeError:   # Single
             return self.soundspeed
         
-        if len(self.soundspeed) == 1 or self.soundspeed.shape == self._model.grid.shape: # Generally the case we have no PML.
+        if self._model is None:
+            raise ValueError("Cannot return value. Medium needs to be part of a Model.")
+        
+        elif len(self.soundspeed) == 1 or self.soundspeed.shape == self._model.grid.shape: # Generally the case we have no PML.
             return self.soundspeed
         else:
             if not self.soundspeed.shape==self._model.grid.shape_without_pml:
@@ -1048,21 +808,6 @@ class Medium(object):
             
             return grid
 
-        
-
-#def requires_object(obj_name):
-    """
-    Catch attribute error and mention obj_name.
-    """
-    #def real_decorator(function):
-        #def wrapper(*args, **kwargs):
-            
-            #try:
-                #function(*args, **kwargs)
-            #except AttributeError:
-                #raise AttributeError("Object has not yet been assigned to an instance of {}".format(obj_name))
-        #return wrapper
-    #return real_decorator
 
 class PML(object):
     """
@@ -1080,9 +825,9 @@ class PML(object):
     Target depth or length of the PML.
     """
     
-    def __init__(self, absorption_coefficient, depth):
+    def __init__(self, absorption_coefficient=None, depth=0.0):
         
-        self.absorption_coefficient = absorption_coefficient
+        self.absorption_coefficient = absorption_coefficient if absorption_coefficient else (0.0, 0.0)
         """
         Maximum absorption coefficient :math:`\\alpha`. Tuple.
         """
@@ -1115,6 +860,8 @@ class PML(object):
     def generate_grid(self):
         """
         Generate the PML grids. A dictionary is returned in which each item represents the PML for a dimension.
+        
+        .. note:: 2D only!
         
         """
         shape = self._model.grid.shape
@@ -1166,18 +913,18 @@ class PML(object):
         #return 50.0
         return alpha_max * ((x - x_0) / (depth*1.1))**m   # 1.01 to prevent division by zero
     
-    def plot(self, filename=None):
+    def plot(self):
+        """Plot PML.
+        """
         
         pml = self.generate_grid()
-        
-        fig = plt.figure(figsize=(16,12), dpi=80)
         
         x = np.arange(self._model.axes.x.nodes+1) * self._model.grid.spacing
         y = np.arange(self._model.axes.y.nodes+1) * self._model.grid.spacing
         xl = self._model.axes.x.length
         yl = self._model.axes.y.length
         
-        fig = plt.figure(figsize=(16, 12), dpi=80)
+        fig = plt.figure()
         grid = AxesGrid(fig, 111, nrows_ncols=(1, 3), axes_pad=0.3, cbar_mode="single")
         
         ax1 = grid[0]#.add_subplot(131, aspect='equal')
@@ -1196,10 +943,7 @@ class PML(object):
         ax2.grid()
         grid.cbar_axes[0].colorbar(plot2)
         
-        if filename:
-            fig.savefig(filename)
-        else:
-            return fig
+        return fig
     
     def _attributes(self):
         pml_fields = ['is_used', 'nodes', 'depth']
@@ -1279,7 +1023,7 @@ class Grid(object):
         if self._spacing:
             return self._spacing
         else:
-            return np.min(self._model.medium.soundspeed) / self.spatial_sample_frequency #(2.0 * self._model.f_max)
+            return np.min(self._model.medium.soundspeed) / self.spatial_sample_frequency #(2.0 * self._model.maximum_frequency)
             
     @spacing.setter
     def spacing(self, x):
@@ -1296,7 +1040,7 @@ class Grid(object):
         
         .. math:: f_{s, spatial} = 2 f_{max}
         """
-        return 2.0 * self._model.f_max
+        return 2.0 * self._model.maximum_frequency
     
     def _attributes(self):
         grid_fields = ['size', 'size_with_pml', 'size_without_pml', 'shape',
@@ -1306,8 +1050,7 @@ class Grid(object):
         return {item : getattr(self, item) for item in grid_fields }
         
         
-@six.add_metaclass(abc.ABCMeta)
-class Model(object):
+class Model(object, metaclass=abc.ABCMeta):
     """
     Abstract model for Time-Domain simulations.
     """
@@ -1317,10 +1060,10 @@ class Model(object):
     Floating point precision. Valid values are 'single' and 'double' for respectively single and double precision.
     """
     
-    _file_handler = None
-    """
-    HDF5 file handler.
-    """
+    #_file_handler = None
+    #"""
+    #HDF5 file handler.
+    #"""
     
     def dtype(self, sort):
         """
@@ -1335,30 +1078,24 @@ class Model(object):
             return np.dtype(sort + str(2*bits))
         else:
             return np.dtype(sort + str(bits))
-    
-    #_f_max = None
-    
-    _timesteps = None
 
-    axes = None
-    """
-    Axes in the model. See :class:`Axes` and :class:`Axis`.
-    """
+    #axes = None
+    #"""
+    #Axes in the model. See :class:`Axes` and :class:`Axis`.
+    #"""
         
     grid = ReverseReference(attr='grid', remote='_model')
-    """
-    Grid. See :class:`Grid`.
+    """Grid. See :class:`Grid`.
     """
     pml = ReverseReference(attr='pml', remote='_model')
-    """
-    Perfectly Matched Layer. See :class:`PML`.
+    """Perfectly Matched Layer. See :class:`PML`.
     """
     axes = ReverseReference(attr='axes', remote='_model')
-    """
-    Axes. See :class:`Axes`.
+    """Axes. See :class:`Axes`.
     """
     medium = ReverseReference(attr='medium', remote='_model')
-    
+    """Medium. See :class:`Medium`.
+    """
     
     ###_threads = None
     
@@ -1379,22 +1116,21 @@ class Model(object):
     ###def threads(self, x):
         ###self._threads = x
     
-    def __init__(self, time, f_max, medium, pml, cfl=0.05, spacing=None, axes=None, size=None, settings=None, grid=None):
+    def __init__(self, maximum_frequency, medium=None, pml=None, cfl=0.05, spacing=None, axes=None, size=None, settings=None, grid=None):
         
         
         super(Model, self).__init__()
         
-        self.settings = DEFAULT_SETTINGS
+        self.settings = dict()
+        """Settings.
+        
+        .. seealso:: :attr:`DEFAULT_SETTINGS`
+        
         """
-        Settings.
-        """
+        self.settings.update(DEFAULT_SETTINGS)
+        
         if settings:
             self.settings.update(settings) # Apply given settings.
-        
-        #self.multithreading = True
-        #"""
-        #Allow multithreading.
-        #"""
         
         
         #self.axes = Axes2D(*[Axis(self, length=i) if i else None for i in size if i]) # Create an axis for each dimension that is not None
@@ -1412,45 +1148,97 @@ class Model(object):
             raise RuntimeError("Either axes or size should be specified.")
         
         self.grid = grid if grid else Grid(spacing)
+        """Grid. 
+        
+        .. seealso:: :class:`Grid`.
+        
         """
-        Grid. See :class:`Grid`.
+
+        self.maximum_frequency = maximum_frequency
+        """Upper frequency limit of the model. Above this frequency limit the model is not reliable.
         """
         
+        self.medium = medium if medium else Medium()
+        """Medium. 
         
-        self.f_max = f_max
-        """
-        Upper frequency limit of the model. Above this frequency limit the model is not reliable.
-        """
+        .. seealso:: :class:`Medium`.
         
-        self.medium = medium
-        """
-        Medium. See :class:`Medium`.
-        """
-        
-        self.time_target = time
-        """
-        Target simulation time.
         """
         
         self.cfl = cfl
         
-        self.pml = pml# if pml else PML()
+        self.pml = pml if pml else PML()
+        """Perfectly Matched Layer.
+        
+        .. seealso:: :class:`PML`
+        
+        """
 
         
-        self.sources = list()
-        """
-        A list of sources. See :class:`Source`.
-        """
-        
-        self.receivers = list()
-        """
-        A list of receivers. See :class:`Receiver`.
+        self._objects = list()
+        """Private list of transducers in model.
         """
 
     @property
-    def cfl(self):
+    def objects(self):
+        """Object.
         """
-        Courant-Friedrichs-Lewy number. The CFL number can be calculated using :func:`CFL`.
+        yield from (self.getObject(obj.name) for obj in self._objects)
+
+    @property
+    def sources(self):
+        """Sources. See :class:`Source`.
+        """
+        yield from (obj for obj in self.objects if isinstance(obj, Source))
+        
+    @property
+    def receivers(self):
+        """Receivers. See :class:`Receiver`.
+        """
+        yield from (obj for obj in self.objects if isinstance(obj, Receiver))
+
+    def getObject(self, name):
+        """Get object by name.
+        
+        :param name: Name of `object`.
+        
+        :returns: Proxy to `object`.
+        
+        """
+        name = name if isinstance(name, str) else name.name
+        
+        for obj in self._objects:
+            if name == obj.name:
+                return weakref.proxy(obj) 
+        else:
+            raise ValueError("Unknown name.")
+    
+    def addObject(self, name, sort, position, **kwargs):
+        """Add object to model.
+        """
+        obj = objects_map[sort](weakref.proxy(self), name, position, **kwargs)
+        self._objects.append(obj)
+        return self.getObject(obj.name)
+    
+    #def addSource(self, name):
+        #pass
+    
+    #def addReceiver(self, name):
+        #pass
+    
+    def removeObject(self, name):
+        """Delete object from model.
+        
+        :param name: Name of object.
+        
+        """
+        for obj in self.objects:
+            if name == obj.name:
+                self._objects.remove(obj)
+    
+    @property
+    def cfl(self):
+        """Courant-Friedrichs-Lewy number. The CFL number can be calculated using :func:`cfl`.
         """
         return self._cfl
 
@@ -1462,28 +1250,27 @@ class Model(object):
         
     @property
     def constant_field(self):
+        """Constant refractive-index field.
         """
-        Constant refractive-index field.
-        """
-        if self.medium.refractive_index.ndim > 2:
-            return False
-        else:
+        try:
+            if self.medium.soundspeed.var() != 0.0:
+                return False
+            else:
+                return True
+        except AttributeError:
             return True
     
     @property
     def ndim(self):
-        """
-        Amount of dimensions. This value is determined from the amount of axes.
+        """Amount of dimensions. This value is determined from the amount of axes.
         """
         return len(self.axes)
 
-    
     _timestep = None
 
     @property
     def timestep(self):
-        """
-        Timestep.
+        """Timestep.
         
         .. math:: \\Delta t = \\frac{ \\mathrm{CFL} \\Delta x } {c_{max}}
         
@@ -1492,170 +1279,91 @@ class Model(object):
             return self._timestep
         else:
             return self.cfl * self.grid.spacing / float(np.max(self.medium.soundspeed))
-        
-    @timestep.setter
-    def timestep(self, x):
-        self._timestep = x
-        
-    @property    
-    def timesteps(self):
-        """
-        Amount of timesteps to be taken. That value can be overridden.
-        
-        .. math:: n = \\frac{t}{\\Delta t}
-        """
-        if self._timesteps:
-            return self._timesteps
-        else:
-            return int(np.ceil(self.time_target / self.timestep))
-    
-    @timesteps.setter
-    def timesteps(self, x):
-        self._timesteps = x 
-    
-    @timesteps.deleter
-    def timesteps(self, x):
-        self._timesteps = None
-    
+
     @property
-    def time(self):
-        """
-        Total simulation time.
-        """
-        return self.timesteps * self.timestep
-    
-    @time.setter
-    def time(self, x):
-        self.time_target = x
-    
-    @property
-    def sample_frequency(self):
-        """
-        Temporal sample frequency in Hz. Inverse of :attr:`timestep`.
+    def temporal_sample_frequency(self):
+        """Temporal sample frequency in Hz. Inverse of :attr:`timestep`.
         """
         return 1.0 / self.timestep
-    
-    @property
-    def shape_spacetime(self):
-        
-        shape = list(self.grid.shape)
-        shape.insert(0, self.timesteps)
-        return shape
-    
-    @property
-    def shape_spacetime_with_pml(self):
-        
-        shape = list(self.grid.shape_with_pml)
-        shape.insert(0, self.timesteps)
-        return shape
-        
-    @property
-    def shape_spacetime_without_pml(self):
-        
-        shape = list(self.grid.shape_without_pml)
-        shape.insert(0, self.timesteps)
-        return shape
-        
-    #@property
-    #def _frequencies(self):
-        #"""
-        #Frequencies up to highest accurate frequency.
-        #"""
-        #return frequencies(self.nodes, self.sample_frequency).astype(self._axes._model.dtype('float'), copy=False)
-    
-    def _prepare_transducers(self):
-        """
-        Prepare transducers. Adds reference to model.
-        """
-        for source in self.sources:
-            source._model = self
-        for receiver in self.receivers:
-            receiver._model = self
-        
-    
-    def _prepare_recorder(self):
-        """
-        Prepare recorder.
-        """
-        
-        if self.settings['recording']['use']:
-            f = h5py.File(self.settings['recording']['filename'],'a')
-            
-            if self.settings['recording']['groupname']:
-                groupname = self.settings['recording']['groupname']
-            else:
-                groupname = datetime.datetime.utcnow().replace(microsecond=0).isoformat()
-            
-            group = f.create_group(groupname)
-            
-            self._file_handler = (f, group)
-            
-            #shape = self.shape_spacetime
-            
-            shape = list()
-            for d, length in zip(self.settings['recording']['slice'], self.grid.shape):
-                if isinstance(d, int):
-                    shape.append(1)
-                elif isinstance(d, slice):
-                    shape.append(_slice_length(d, length))
-                    
-            #shape = [i for i in self.settings['recording']['slice']]
-            shape.insert(0, self.timesteps)
-            
-            shape = tuple(shape)
-            #shape = (self.timesteps, 
-                     #self.settings['recording']['slice'][0],
-                     #self.settings['recording']['slice'][1])
 
-            field = group.create_group('field')
-            for quantity in self.settings['recording']['quantities']:
-                field.create_dataset(quantity, shape, dtype=self.dtype('float'))
-
-            if self.settings['recording']['meta']:
-                # Main parameters
-                
-                model = group.create_group['model']
-                for key, value in self._attributes():
-                    model.attrs[key] = value
+    #def _prepare_recorder(self):
+        #"""Prepare recorder.
+        #"""
+        
+        #if self.settings['recording']['use']:
+            #f = h5py.File(self.settings['recording']['filename'],'a')
+            
+            #if self.settings['recording']['groupname']:
+                #groupname = self.settings['recording']['groupname']
+            #else:
+                #groupname = datetime.datetime.utcnow().replace(microsecond=0).isoformat()
+            
+            #group = f.create_group(groupname)
+            
+            #self._file_handler = (f, group)
+            
+            ##shape = self.shape_spacetime
+            
+            #shape = list()
+            #for d, length in zip(self.settings['recording']['slice'], self.grid.shape):
+                #if isinstance(d, int):
+                    #shape.append(1)
+                #elif isinstance(d, slice):
+                    #shape.append(_slice_length(d, length))
                     
-                #group.attrs.create('cfl', self.cfl)
-                #group.attrs.create('ndim', self.ndim)
-                #group.attrs.create('timestep', self.timestep)
-                #group.attrs.create('timesteps', self.timesteps)
-                #group.attrs.create('time', self.time)
-                #group.attrs.create('temporal_sample_frequency', self.sample_frequency)
+            ##shape = [i for i in self.settings['recording']['slice']]
+            #shape.insert(0, self.timesteps)
+            
+            #shape = tuple(shape)
+            ##shape = (self.timesteps, 
+                     ##self.settings['recording']['slice'][0],
+                     ##self.settings['recording']['slice'][1])
+
+            #field = group.create_group('field')
+            #for quantity in self.settings['recording']['quantities']:
+                #field.create_dataset(quantity, shape, dtype=self.dtype('float'))
+
+            #if self.settings['recording']['meta']:
+                ## Main parameters
                 
-                # Grid parameters
-                grid = group.create_group('grid')
-                for key, value in self.grid._attributes():
-                    grid.attrs[key] = value
+                #model = group.create_group('model')
+                #for key, value in self._attributes().items():
+                    #model.attrs[key] = value
+                    
+                ##group.attrs.create('cfl', self.cfl)
+                ##group.attrs.create('ndim', self.ndim)
+                ##group.attrs.create('timestep', self.timestep)
+                ##group.attrs.create('timesteps', self.timesteps)
+                ##group.attrs.create('time', self.time)
+                ##group.attrs.create('temporal_sample_frequency', self.sample_frequency)
                 
-                # PML parameters
-                pml = group.create_group('pml')
-                for key, value in self.pml._attributes():
-                    pml.attrs[key] = value
+                ## Grid parameters
+                #grid = group.create_group('grid')
+                #for key, value in self.grid._attributes().items():
+                    #grid.attrs[key] = value
                 
-                
-                #grid.attrs.create('spacing', self.grid.spacing)
-                #grid.attrs.create('spatial_sample_frequency', self.grid.spatial_sample_frequency)
-                #grid.attrs.create('size', self.grid.size)
-                #grid.attrs.create('size_with_pml', self.grid.size_with_pml)
-                #grid.attrs.create('size_without_pml', self.grid.size_without_pml)
-                #grid.attrs.create('shape', self.grid.shape)
-                #grid.attrs.create('shape_with_pml', self.grid.shape_with_pml)
-                #grid.attrs.create('shape_without_pml', self.grid.shape_without_pml)
-                
-                # Medium parameters
-                medium = group.create_group('medium')
-                medium.create_dataset('soundspeed', data=self.medium.soundspeed)
-                medium.attrs.create('density', self.medium.density)
-                medium.attrs.create('soundspeed_mean', self.medium.soundspeed_mean)
-                medium.create_dataset('soundspeed_for_calculation', data=self.medium.soundspeed_for_calculation)
-                s = self.settings['recording']['slice']
+                ## PML parameters
+                #pml = group.create_group('pml')
+                #for key, value in self.pml._attributes().items():
+                    #pml.attrs[key] = value
                 
                 
+                ##grid.attrs.create('spacing', self.grid.spacing)
+                ##grid.attrs.create('spatial_sample_frequency', self.grid.spatial_sample_frequency)
+                ##grid.attrs.create('size', self.grid.size)
+                ##grid.attrs.create('size_with_pml', self.grid.size_with_pml)
+                ##grid.attrs.create('size_without_pml', self.grid.size_without_pml)
+                ##grid.attrs.create('shape', self.grid.shape)
+                ##grid.attrs.create('shape_with_pml', self.grid.shape_with_pml)
+                ##grid.attrs.create('shape_without_pml', self.grid.shape_without_pml)
                 
-                
+                ## Medium parameters
+                #medium = group.create_group('medium')
+                #medium.create_dataset('soundspeed', data=self.medium.soundspeed)
+                #medium.attrs.create('density', self.medium.density)
+                #medium.attrs.create('soundspeed_mean', self.medium.soundspeed_mean)
+                #medium.create_dataset('soundspeed_for_calculation', data=self.medium.soundspeed_for_calculation)
+                #s = self.settings['recording']['slice']
                 
                 #try:
                     #c = group.create_dataset('c', data=self.medium.soundspeed[s])
@@ -1666,143 +1374,184 @@ class Model(object):
                 #pml = group.create_group('pml')
                 #pml.attrs.create('is_used', self.pml.is_used)
                 #pml.attrs.create(
-            
-
-    #@autojit
+               
+    
+    def _pre_start(self, data):
+        """This method is run at the beginning of a simulation.
+        """
+        return data
+    
     def _pre_run(self, data):
+        """This method is run before every simulation run.
         """
-        This function is performed before the simulation begins.
+        logging.info("Progress: Continuing simulation")
         
+        data['_t'] = time.perf_counter()   # Start timing
         
-        The following actions are performed:
+        return data
         
-        * Create PML using :meth:`PML.generate_grid' if PML is used.
-        * Create field arrays.
-        * Create source arrays.
-        * Start timer for progress logging.
+    def _post_run(self, data):
+        """This method is run after every simulation run.
+        """
+        logging.info('Progress: Done')
+        return data
+        #if self.settings['recording']['use']:
+            #self._file_handler[0].close()
+            
+    def _pre_update(self, data):
+        """This method is run before each update.
+        """
+        return data
+        
+    
+    def _post_update(self, data):
+        """This method is run after each update.
+        """
+        t = time.perf_counter()
+        dt = t - data['_t']
+        data['_t'] = t
+        
+        for receiver in self.receivers:
+            receiver._data.append(data['field'][(receiver.quantity, receiver.component)][receiver._position_in_nodes].real)
+            #for field, value in receiver.data.items():
+                #value.append( data['field'][field][receiver._position_in_nodes].real)
+
+        logging.info("Step {} is done and took {} seconds.".format(data['step'], dt))
+        return data
+    
+    #def _record(self, timestep, fields_with_pml):
+        #"""
+        #Record quantities.
+        #"""
+        
+        ## If a PML is used and if we don't want to include the PML nodes then we need to select only the non-PML part.
+        #if self.pml.is_used and not self.settings['pml']['include_in_output']:
+            #pml = self.pml.depth
+            #shape_without_pml = tuple([slice(pml, length-pml) for length in self.grid.shape_with_pml])
+            #fields = dict()
+        
+            #for key, value in fields_with_pml.items():
+                #fields['key'] = value[shape_without_pml]
+        #else:
+            #fields = fields_with_pml
+        
+        #for receiver in self.receivers:
+            #for quantity, value in receiver.data.items():
+                #value[timestep] = fields[quantity][receiver._position_in_nodes].real
+    
+        #if self.settings['recording']['use']:
+            #f = self._file_handler[0]
+            #group = self._file_handler[1]
+            
+            #x = self.settings['recording']['slice'][0]
+            #y = self.settings['recording']['slice'][1]
+
+            #for quantity in group['field'].keys():
+                ##print group[quantity][timestep].shape, fields[quantity].shape
+                
+                #group['field'][quantity][timestep,:,:] = fields[quantity][x,y].real
+    
+    @abc.abstractmethod
+    def _update():
+        """Update steps to perform. This needs to be implemented.
+        """
+        pass
+    
+    def run(self, steps=None, seconds=None):
+        """Run the simulation for a specified amount of steps or time.
+        
+        :param steps: Amount of steps.
+        :param seconds: Amount of time in seconds. Steps will be determined using :meth:`timestep`.
         
         """
-        logger.info("Progress: Starting simulation")
+        if steps is None and seconds is None:
+            raise ValueError("Amount of steps or seconds needs to be specified.")
+        elif steps is not None and seconds is not None:
+            raise ValueError("Either amount of steps or seconds needs to be specified, not both.")
+        elif seconds is not None:
+            steps = int(np.ceil(seconds / self.timestep))
         
-        self._prepare_transducers()
+        logging.info("Will run for {} steps.".format(steps))
+        
+        try:
+            self._generator
+        except AttributeError:
+            self.restart()
+        g = self._generator
+        
+        for i in range(steps):
+            data = next(g)
+        else:
+            self.data = self._post_run(data)
+        
+        return self
+    
+    def _run(self, data, sources):
+        """
+        Event loop.
+        
+        :param data: Generator containing `data` for every time instance.
+        
+        """
+        data = self._pre_run(data)
+        while True:
+            data['source'] = next(sources)
+            data = self._pre_update(data)
+            data = self._update(data)
+            data = self._post_update(data)
+
+            yield data
+            data['step'] += 1
+        
+    def restart(self):
+        """
+        Restart simulation.
+        """ 
+        self._start()
+        return self
+
+    def _start(self):
+        """
+        Tasks to perform on a new start.
+        """
+        
+        logging.info("Progress: Starting new simulation")
+        
+        data = dict()
+        data['spacing'] = self.grid.spacing
+        data['timestep'] = self.timestep
+        data['step'] = 0
+        
+        #self._prepare_transducers()
         
         data['pml'] = self.pml.generate_grid()  # Get pml if pml is used.
         shape = self.grid.shape
         
         """Add field quantities"""
         data['field'] = dict()
-        for quantity in self.FIELD_ARRAYS:
-            data['field'][quantity] = np.zeros(shape, dtype=self.dtype('float'))
-        
-        """Add sources"""
-        data['source'] = self.create_source_arrays()    # Create source terms.
-        
-        """Prepare receivers."""
-        timesteps = self.timesteps
-        for receiver in self.receivers:
-            #receiver._model = self
-            receiver._position_in_nodes = receiver.position_in_nodes # Store static value
-            receiver.data = {quantity: np.zeros(timesteps, dtype=self.dtype('float')) for quantity in receiver.quantities}
+        for field in self.FIELD_ARRAYS:
+            data['field'][field] = np.zeros(shape, dtype=self.dtype('float'))
+            
+        """Prepare transducers."""
+        for obj in self.objects:
+            obj._start()
         
         """Prepare recorder."""
-        self._prepare_recorder()
-        
-        data['_t'] = time.clock()   # Start timing
-        
-        
-        
-        
-    #@numba.autojit    
-    def _post_run(self, data):
-        """
-        This function is performed after the simulation is finished.
-        """
-        logger.info('Progress: Done')
-        
-        if self.settings['recording']['use']:
-            self._file_handler[0].close()
-    
-    #@numba.autojit
-    def _pre_update(self, data):
-        """
-        This function is performed before each update.
-        """
-        pass
-    
-    #@numba.autojit
-    def _post_update(self, data):
-        """
-        This function is performed after each update.
-        """
-        t = time.clock()
-        dt = t - data['_t']
-        data['_t'] = t
-        time_left = (data['steps']-data['step']) * dt
-        
-        self._record(data['step'], data['field'])
-        
-        
-        logger.info('Progress: {:3.1f}% - Step {}/{}  - Time left: {:.0f}'.format(
-            float(data['step'])/float(data['steps'])*100.0, 
-            data['step'], 
-            data['steps'],
-            time_left))
-    
-    def _record(self, timestep, fields):
-        """
-        Record quantities.
-        """
-        for receiver in self.receivers:
-            for quantity, value in receiver.data.iteritems():
-                value[timestep] = fields[quantity][receiver._position_in_nodes].real
-    
-        if self.settings['recording']['use']:
-            f = self._file_handler[0]
-            group = self._file_handler[1]
-            
-            x = self.settings['recording']['slice'][0]
-            y = self.settings['recording']['slice'][1]
+        #self._prepare_recorder()
 
-            for quantity in group['field'].keys():
-                #print group[quantity][timestep].shape, fields[quantity].shape
-                
-                group['field'][quantity][timestep,:,:] = fields[quantity][x,y].real
-    
-    @abc.abstractmethod
-    def _update():
-        """
-        Update steps to perform.
-        """
-        pass
-    
-    #@numba.autojit
-    def run(self):
-        """
-        Run simulation.
-        """
-        shape = self.grid.shape
+        """Generate the main loop."""
+        sources = self._source_arrays_generator()
+        #data['_t'] = time.perf_counter()
         
-        data = {}
-        data['steps'] = self.timesteps
-        data['spacing'] = self.grid.spacing
-        data['timestep'] = self.timestep #* np.ones(shape, dtype=self.dtype('float'))
+        data = self._pre_start(data)
+        self.data = data # To allow model.run(steps=0)
+        self._generator = self._run(data, sources)
 
-        self._pre_run(data)
-        
-        for step in xrange(data['steps']):
-            data['step'] = step
-            self._pre_update(data)
-            self._update(data)
-            self._post_update(data)
-            
-        self._post_run(data)
-        
-        self.data = data
-        #return data
+        return self
     
     def _attributes(self):
-        model_fields = ['f_max', 'time', 'cfl', 'timestep', 'timesteps', 'sample_frequency',
-                'shape_spacetime', 'shape_spacetime_with_pml', 'shape_spacetime_without_pml']
+        model_fields = ['maximum_frequency', 'time', 'cfl', 'timestep', 'timesteps', 'sample_frequency']
+                #'shape_spacetime', 'shape_spacetime_with_pml', 'shape_spacetime_without_pml']
         return {item : getattr(self, item) for item in model_fields }            
         
 
@@ -1813,8 +1562,7 @@ class Model(object):
         
         sources = [source._attributes() for source in self.sources]
         receivers = [receiver._attributes() for receiver in self.receivers]
-        
-        
+
         data = {'model' : self._attributes(),
                 'pml' : self.pml._attributes(),
                 'grid' : self.grid._attributes(),
@@ -1823,33 +1571,17 @@ class Model(object):
                 'settings' : self.settings,
             }
         
-        #sources = [{item : getattr(source, item) for item in source_fields } for source in self.sources]
-        #receivers = [{item : getattr(receiver, item) for item in receiver_fields } for receiver in self.receivers]
-        
-        #data = {'model' : model,
-                #'grid' : grid,
-                #'pml' : pml,
-                #'sources' : sources,
-                #'receivers' : receivers,
-                #}
-        
-        
         with open(filename, 'w') as fout:
             fout.write( yaml.dump(data, default_flow_style=False) )
-        
-        #yaml.dump(data, filename, default_flow_style=False)
-        
-        
-        
-    
+ 
     def overview(self):
         """
         Overview of settings.
         """
-        return ("Simulation time: {} \n".format(self.time) + 
-                "Model timesteps: {} \n".format(self.timesteps) +
-                "Model timestep: {} \n".format(self.timestep) +
-                "Maximum frequency: {:.1f}\n".format(self.f_max) +
+        return ("Model timestep: {} \n".format(self.timestep) +
+                "Maximum frequency: {:.1f}\n".format(self.maximum_frequency) +
+                "Sample frequency temporal: {:.1f}\n".format(self.temporal_sample_frequency) + 
+                "Sample frequency spatial: {:.1f}\n".format(self.grid.spatial_sample_frequency) + 
                 "Grid spacing: {:.3f}\n".format(self.grid.spacing) +
                 "Grid shape: {}\n".format(self.grid.shape) +
                 "Grid shape without PML: {}\n".format(self.grid.shape_without_pml) +
@@ -1859,97 +1591,39 @@ class Model(object):
                 "PML depth actual: {:.2f}\n".format(self.pml.depth) +
                 "Grid size: {}\n".format(self.grid.size) +
                 "Grid size without PML: {}\n".format(self.grid.size_without_pml) +
-                "Grid size with PML: {}\n".format(self.grid.size_with_pml)
+                "Grid size with PML: {}\n".format(self.grid.size_with_pml) +
+                "Amount of sources: {}\n".format(len(list(self.sources))) +
+                "Amount of receivers: {}\n".format(len(list(self.receivers)))
                 )
-            
-
-    def create_source_arrays(self):
+ 
+    
+    def _source_arrays_generator(self):
         """
-        Create arrays describing source terms.
+        Source arrays generator.
         
-        .. note:: For now, only source at t=0 are supported.
+        This generator yields every timestep a dictionary containing source arrays.
+        """
+        while True:
+            sources = dict()
+            for field in self.FIELD_ARRAYS:
+                sources[field] = 0.0
+            for source in self.sources:
+                sources[(source.quantity, source.component)] += next(source._field_generator)
+                #if source.quantity == 'pressure':
+                    #sources['pressure'] += next(source._field_generator)
+                #elif source.quantity == 'velocity':
+                    #sources['velocity'][source.component] += next(source._field_generator)
+            yield sources
         
-        """  
-        
-        timesteps = self.timesteps
-        #shape = self.grid.shape
-        spacing = self.grid.spacing
-        dimensions = self.axes.DIMENSIONS
-        ndim = self.axes.ndim
-        
-        c = self.medium.soundspeed_for_calculation
-        
-        sources = dict()
-        #sources['p'] = SparseList(length=timesteps, default=0.0)
-        #sources['p'] = {i : 0.0 for i in range(timesteps)}
-        
-        shape = self.shape_spacetime
-        
-        #sources['p'] = SparseArray(shape, dtype=self.dtype('float'))
-        sources['p'] = SparseList(length=timesteps, default=0.0)
-        
-        sources['v'] = dict()
-        for dim in dimensions:
-            sources['v'][dim] = SparseList(length=timesteps, default=0.0) # List where each item represents the emission at a certain timestep.
-            #sources['v'][dim] = SparseArray(shape, dtype=self.dtype('float'))
-            
-        #### Create empty sparse "matrices" for each field.
-        ###p_x = sp.lil_matrix((self.axes.y.n, self.axes.x.n), dtype=self.dtype)
-        ###p_y = sp.lil_matrix((self.axes.y.n, self.axes.x.n), dtype=self.dtype)
-        ###v_x = sp.lil_matrix((self.axes.y.n, self.axes.x.n), dtype=self.dtype)
-        ###v_y = sp.lil_matrix((self.axes.y.n, self.axes.x.n), dtype=self.dtype)
-        
-        # Add the source contributions to these sparse matrices.
-        for source in self.sources:
-            #source._model = self # HACK Should already be set when source is assigned to model.
-            
-            if source.quantity == 'pressure':
-                #sources['p'] = sources['p'] + source.field
-                for step in range(timesteps):
-                    sources['p'][step] += source.field[step]
-                
-            elif source.quantity == 'velocity':
-                #sources['v'][source.component] = sources['v'][source.component] + source.field
-                for step in range(timesteps):
-                    sources['v'][source.component][step] += source.field[step]
 
-            #print sources['p']
-
-            #if source.pulse:
-                #if source.pressure:
-                    #sources['p'][0] += source.pressure_field_pulse()
-                    
-                #if source.velocity:
-                    #for dim, velocity in zip(dimensions, source.velocity_field_pulse()):
-                        #sources['v'][dim][0] += velocity
-            
-            #else: # Continues signal
-                #if source.pressure is not None:
-                    #for timestep in range(timesteps):
-                        #sources['p'][timestep] = sources['p'][timestep] + source.pressure_field_continuous_signal()
-                
-                #if source.velocity is not None:
-                    #for dim, velocity in zip(dimensions, source.velocity_field_continuous_signal()):
-                        #sources['v'][dim][timestep] += source.pressure_field_continuous_signal()
-            
-                #for i, dim in enumerate(dimensions):  # For each component/dimension
-                    #sources['v'][dim][0] += source.force(source.velocity[i], c, spacing) 
-
-        #### Convert the LIL sparse matrices to a format that is more efficient for multiplication, like CSR or CSC.
-        ###for name, value in sources.iteritems():
-            ###sources[name] = sp.csr_matrix(value)
-        
-        return sources
-    
-    
-    def plot_scene(self, filename=None):
+    def plot_scene(self):
         """
         Plot the sources and receivers on the grids.
         """
         
-        self._prepare_transducers()
+        #self._prepare_transducers()
         
-        fig = plt.figure(figsize=(16,12), dpi=80)
+        fig = plt.figure()
         
         
         
@@ -1978,127 +1652,81 @@ class Model(object):
         ax.set_xlim(0.0, self.axes.x.length)
         ax.set_ylim(0.0, self.axes.y.length)
         
-        if filename:
-            fig.savefig(filename)
-        else:
-            return fig
+        return fig
     
-    
-    def plot_impulse_responses(self, quantity='p', yscale='linear', filename=None):
+    def plot_field(model, quantity='pressure', component=None):
         """
-        Plot the impulse responses measured at the receivers.
+        Plot field.
         
-        :param quantity: Quantity to plot.
-        :param yscale: Logarithmic `log` or linear `linear` scale.
-        :param filename: Optionally write figure to file.
-        """
-        
-        fig = plt.figure(figsize=(16, 12), dpi=80)
-        ax1 = fig.add_subplot(111)
-        
-        ax1.set_title("Impulse response")
-        
-        t = np.arange(self.timesteps) * self.timestep
-        
-        for receiver in self.receivers:
-            if receiver.data.has_key(quantity):
-                ir = receiver.data[quantity]
-                if yscale == 'log':
-                    ir = 20.0 * 10.0*np.log10(np.abs(ir))
-                ax1.plot(t, ir, label=receiver.position)
-        ax1.grid('on')
-        ax1.legend()
-        ax1.set_xlabel(r"$t$ in s")
-
-        #print quantity
-        
-        if yscale == 'log':
-            ax1.set_ylabel(r"$20 \log |{}|$ in {}".format(quantity, QUANTITIES[quantity]))
-        else:
-            ax1.set_ylabel(r"${}$ in {}".format(quantity, QUANTITIES[quantity]))
-
-        if filename:
-            fig.savefig(filename)
-        else:
-            return fig
-    
-    
-    def plot_frequency_responses(self, quantity='p', xscale='linear', yscale='linear', filename=None):
-        """
-        Plot the frequency responses.
-        
-        The top figure shows the magnitude response and the bottom figure the phase response.
+        :param quantity: Field quantity.
+        :param component: Field component.
         
         """
         
-        fig = plt.figure(figsize=(16, 12), dpi=80)
+        TITLES = {
+            ('pressure', None)  : 'Sound pressure',
+            ('velocity', 'x')   : 'Particle velocity in $x$-direction.',
+            ('velocity', 'y')   : 'Particle velocity in $y$-direction.',
+            }
         
-        ax1 = fig.add_subplot(211)
-        ax2 = fig.add_subplot(212)
+        QUANTITIES = {
+            ('pressure', None)  : '$p$ in Pa',
+            ('velocity', 'x')   : '$v_x$ in m/s',
+            ('velocity', 'y')   : '$v_y$ in m/s',
+            }
         
-        for receiver in self.receivers:
-            if receiver.data.has_key(quantity):
-                ir = receiver.data[quantity]
-                f, tf = ir2fr(ir, 1.0/self.timestep)
-                
-                if xscale == 'log':
-                    func = 'semilogx'
-                else:
-                    func = 'plot'
-                    
-                getattr(ax1, func)(f, 10.0*np.log10(np.abs(tf)), label=receiver.position)
-                getattr(ax2, func)(f, np.unwrap(np.angle(tf)), label=receiver.position)
+        data = model.data
+        spacing = model.grid.spacing
+        
+        field = data['field'][(quantity, component)]
+        
+        if model.settings['pml']['use'] and not model.settings['pml']['include_in_output']:
+            xs = model.axes.x.nodes_without_pml
+            ys = model.axes.y.nodes_without_pml
+            depth = model.pml.nodes
+            field = field[+depth:-depth,+depth:-depth]
+        
+        x = np.arange(xs+1) * spacing
+        y = np.arange(ys+1) * spacing
+        
+        if quantity is not 'pressure':
+            x += spacing/2.0
+            y += spacing/2.0
             
-        
-        ax1.set_title("Magnitude response")
+        fig = plt.figure()
+        ax1 = fig.add_subplot(111, aspect='equal')
+        ax1.set_title(TITLES[(quantity, component)])
+        plot1 = ax1.pcolormesh(x, y, field.real.T)
+        ax1.set_xlabel(r'$x$ in m')
+        ax1.set_ylabel(r'$y$ in m')
+        ax1.set_xlim(0.0, x[-1])
+        ax1.set_ylim(0.0, y[-1])
         ax1.grid()
-        ax1.legend()
-        ax1.set_xlabel(r"$f$ in Hz")
-        ax1.set_ylabel(r"$|{}|$ in {}".format(quantity, QUANTITIES[quantity]))
-        #ax1.set_ylabel(r"$20 \log|{}|$ in {}".format(quantity, QUANTITIES[quantity]))
-        ax1.set_xlim(0.0, self.f_max)
+        orientation = 'horizontal' if xs > ys else 'vertical'
+        c = fig.colorbar(plot1, orientation=orientation, pad=0.06)
+        c.set_label(QUANTITIES[(quantity, component)])
         
-        ax2.set_title("Phase response")
-        ax2.grid()
-        ax2.legend(loc="lower right")
-        ax2.set_xlabel(r"$f$ in Hz")
-        ax2.set_ylabel(r"$\angle {}$ in radians".format(quantity))
-        ax2.set_xlim(0.0, self.f_max)
-
-            
-        #if xscale == 'log':
-            #ax1.semilogx(t, receiver.data[quantity], label=receiver.position)
-        #else:
-        
-            
-        if filename:
-            fig.savefig(filename)
-        else:
-            return fig
+        return fig
     
-    def plot_field(self, filename=None):
+    
+    def plot_fields(self):
         """
         Plot pressure and velocities fields.
         
-        :param data: Data dictionary.
-        :param filename: Optional filename.
         """
         data = self.data
         
         spacing = self.grid.spacing
         
-        #xl = self.axes.x.length
-        #yl = self.axes.y.length
-        
         x = np.arange(self.axes.x.nodes+1) * spacing
         y = np.arange(self.axes.y.nodes+1) * spacing
         
-        fig = plt.figure(figsize=(16, 12), dpi=80)
-        grid = AxesGrid(fig, 111, nrows_ncols=(1, 3), axes_pad=0.3, cbar_mode="each")
-        
+        fig = plt.figure()
+        grid = AxesGrid(fig, 111, nrows_ncols=(1,3), axes_pad=0.3, cbar_mode="each")
+                
         ax1 = grid[0]#.add_subplot(131, aspect='equal')
         ax1.set_title("Sound pressure")
-        plot1 = ax1.pcolormesh(x, y, (data['field']['p']).T.real)
+        plot1 = ax1.pcolormesh(x, y, (data['field'][('pressure', None)]).T.real)
         ax1.set_xlim(0.0, x[-1])
         ax1.set_ylim(0.0, y[-1])
         ax1.grid()
@@ -2109,7 +1737,7 @@ class Model(object):
         
         ax2 = grid[1]#fig.add_subplot(132, aspect='equal')
         ax2.set_title(r"Particle velocity in $x$-direction")
-        plot2 = ax2.pcolormesh(x, y, data['field']['v_x'].T.real)
+        plot2 = ax2.pcolormesh(x, y, data['field'][('velocity','x')].T.real)
         #ax2.set_xlim(0.0 + spacing/2.0, xl + spacing/2.0)
         #ax2.set_ylim(0.0 + spacing/2.0, yl + spacing/2.0)
         ax2.grid()
@@ -2117,22 +1745,41 @@ class Model(object):
         
         ax3 = grid[2]#fig.add_subplot(133, aspect='equal')
         ax3.set_title(r"Particle velocity in $y$-direction")
-        plot3 = ax3.pcolormesh(x, y, data['field']['v_y'].T.real)
+        plot3 = ax3.pcolormesh(x, y, data['field'][('velocity','y')].T.real)
         #ax3.set_xlim(0.0 + spacing/2.0, xl + spacing/2.0)
         #ax3.set_ylim(0.0 + spacing/2.0, yl + spacing/2.0)
         ax3.grid()
         grid.cbar_axes[2].colorbar(plot3)
         
-        if filename:
-            fig.savefig(filename)
-        else:
-            return fig
+        return fig
+
+#class Field(object):
+    #"""
+    #Field describes a field of values.
+    #"""
+    
+    
+    #def __init__(self, data):
+        #pass
+    
+    
+    #@abc.abstractmethod
+    #def plot(self, quantity='pressure', filename=None):
+        #pass
+        
+
+#class Field2D(Field):
+    #"""
+    #Field2D describes a 2D field of values.
+    #"""
+    #pass
+
     
 DEFAULT_SETTINGS = {
 
     'pml' : {
         'use' : True, # Whether to use a PML. The field arrays will be shaped accordingly.
-        'include_in_output' : True, # Include the PML in the output values/grids.
+        'include_in_output' : False, # Include the PML in the output values/grids.
         },
     #'multithreading': {
         #'use' : False,
@@ -2142,7 +1789,7 @@ DEFAULT_SETTINGS = {
         'use' : False,  # Use recorder
         'filename' : 'recording.hdf',
         'groupname' : None,
-        'quantities' : ['p'],
+        'quantities' : ['pressure'],
         'slice' : (slice(None), slice(None)), # Can be a (x,y) or (x,y,z) tuple.
         'meta' : True # Store addition data like speed of sound, grid shape and size, etc.
         },
@@ -2151,35 +1798,7 @@ DEFAULT_SETTINGS = {
 Default settings.
 """
 
-
-
-
-def decibel_to_neper(decibel):
-    """
-    Convert decibel to neper.
-    
-    :param decibel: Value in decibel (dB).
-    
-    The conversion is done according to
-    
-    .. math :: \\mathrm{dB} = \\frac{\\log{10}}{20} \\mathrm{Np}
-    
-    """
-    return np.log(10.0) / 20.0  * decibel
-
-def neper_to_decibel(neper):
-    """
-    Convert neper to decibel.
-    
-    :param neper: Value in neper (Np).
-    
-    The conversion is done according to
-
-    .. math :: \\mathrm{Np} = \\frac{20}{\\log{10}} \\mathrm{dB}
-    """
-    return 20.0 / np.log(10.0) * neper
-
-def CFL(c_0, timestep, spacing):
+def cfl(c_0, timestep, spacing):
     """
     Courant-Friedrichs-Lewy number.
     
@@ -2214,66 +1833,134 @@ def frequencies(n, fs):
     """
     return np.fft.fftfreq(n, fs)
     
-def circular_receiver_array(center, radius, n, quantities=None):
+        
+    
+def circular_receiver_array(model, name, center, radius, n, quantities=None):
     """
     Create a receiver array with receivers on a circle. Returns a list of receivers.
+    
+    :param model: Model.
+    :param name: Base name of receivers. An integer is added to the base name.
+    :param center: Center.
+    :param radius: Radius of the circle.
+    :param n: Amount of receivers.
+    :param spacing: Spacing between receivers.
+    :param quantities: List of quantities to record.
+    
     
     .. note:: 2D only.
     
     """
-    quantities = quantities if quantities else ['p']
+    quantities = quantities if quantities else ['pressure']
     
     receivers = list()
     
     angles = np.linspace(0, 2.0*np.pi, n, endpoint=False)
     
-    x_vec = np.cos(angles) * radius
-    y_vec = np.sin(angles) * radius
+    cx = np.cos(angles) * radius + center.x
+    cy = np.sin(angles) * radius + center.y
     
-    for x, y in zip(x_vec, y_vec):
-        receivers.append(Receiver(Position2D(center.x + x, center.y + y), quantities))
+    for i, (px, py) in enumerate(zip(cx, cy)):
+        receivers.append(model.addObject(name+'_'+str(i), 'Receiver', Position2D(px, py), quantities=quantities))
     
     return receivers
 
-def line_receiver_array(start, stop, n, quantities=None):
-    """
-    Create an array of receivers along a line. Returns a list of receivers.
+def line_receiver_array(model, name, start, stop, n=None, spacing=None, quantities=None):
+    """Create an array of receivers along a line. Returns a list of receivers.
+    
+    :param model: Model
+    :param start: Start Position.
+    :param stop: Stop position.
+    :param n: Amount of receivers.
+    :param spacing: Spacing between receivers.
+    :param name: Base name of receivers. An integer is added to the base name.
+    :param quantities: List of quantities to record.
     
     .. note:: 2D only.
+    
     """
-    quantities = quantities if quantities else ['p']
+    quantities = quantities if quantities else ['pressure']
+    
+    if spacing and n:
+        raise ValueError("Either spacing or n should be given. Not both.")
+    elif spacing:
+        n = int(round( (stop - start) / spacing ))
+    else:
+        pass
     
     receivers = list()
     
-    p_x = np.linspace(start.x, stop.x, n, endpoint=True)
-    p_y = np.linspace(start.y, stop.y, n, endpoint=True)
+    cx = np.linspace(start.x, stop.x, n, endpoint=True)
+    cy = np.linspace(start.y, stop.y, n, endpoint=True)
     
-    for x, y in zip(p_x, p_y):
-        receivers.append(Receiver(Position2D(x, y), quantities))
-    
+    for i, (px, py) in enumerate(zip(cx, cy)):
+        receivers.append(model.addObject(name+'_'+str(i), 'Receiver', Position2D(px, py), quantities=quantities))
     return receivers
     
 
-def plot_signal(signal, time, filename=None):
-    """
-    Plot signal.
+def grid_receiver_array(model, name, center, x, y, n=None, spacing=None, quantities=None):
+    """Create an array of receivers. Returns a list of receivers.
     
-    :param signal: Signal vector.
-    :param time: Time vector.
-    :param filename: Optional filename.
+    :param model: Model
+    :param start: Start Position.
+    :param stop: Stop position.
+    :param n: Amount of receivers.
+    :param spacing: Spacing between receivers.
+    :param name: Base name of receivers. An integer is added to the base name.
+    :param quantities: List of quantities to record.
+    
+    .. note:: 2D only.
+    
     """
-    fig = plt.figure()
-    ax0 = fig.add_subplot(111)
-    ax0.set_title('Signal')
-    ax0.plot(self.time, self.signal)
-    ax0.set_xlabel(r'$t$ in s')
-    ax0.set_ylabel(r'$x$ in -') 
-
-    if filename:
-        fig.savefig(filename)
+    quantities = quantities if quantities else ['pressure']
+    
+    if spacing and n:
+        raise ValueError("Either spacing or n should be given. Not both.")
+    elif n:
+        spacing = np.sqrt(x*y/n)
     else:
-        return fig
+        pass
+        
+    receivers = list()
     
+    cx = np.arange(center.x-x/2.0, center.x+x/2.0, spacing) + spacing/2.0
+    cy = np.arange(center.x-x/2.0, center.x+x/2.0, spacing) + spacing/2.0
+
+    for i, (px, py) in enumerate(itertools.product(cx, cy)):
+        receivers.append(model.addObject(name+'_'+str(i), 'Receiver', Position2D(px, py), quantities=quantities))
+    return receivers
+    
+    
+def radial_grid_receiver_array(model, name, center, radius, n, angles, quantities=None):
+    """Create a radial grid array of receivers. 
+    
+    The radial grid is build using line arrays. 
+    
+    :param model: Model.
+    :param name: Base name of receivers. An integer is added to the base name.
+    :param center: Center.
+    :param radius: Radius of the circle.
+    :param n: Amount of receivers per angle.
+    :param angles: Amount of angles/line receivers.
+    :param spacing: Spacing between receivers.
+    :param quantities: List of quantities to record.
+    
+    """
+    
+    quantities = quantities if quantities else ['pressure']
+    
+    receivers = list()
+    
+    angles = np.linspace(0, 2.0*np.pi, n, endpoint=False)
+    
+    cx = np.cos(angles) * radius + center.x
+    cy = np.sin(angles) * radius + center.y
+    
+    for i, (px, py) in enumerate(zip(cx, cy)):
+        outside = Position2D(px, px)
+        receivers.append( line_receiver_array(model, name+"_rad_{}".format(i), center, outside, n=n, quantities=quantities))
+    return receivers
+   
     
 def animate_field(data, fps, filename=None):
     """
@@ -2295,40 +1982,11 @@ def animate_field(data, fps, filename=None):
     if filename:
         anim.save(filename, fps=fps, extra_args=['-vcodec', 'libx264'])
     else:
-        plt.show()
-    
-    
-def ir2fr(ir, fs, N=None):
-    """
-    Convert impulse response into frequency response. Returns single-sided RMS spectrum.
-    
-    :param ir: Impulser response
-    :param fs: Sample frequency
-    :param N: Blocks
-    
-    Calculates the positive frequencies using :func:`np.fft.rfft`.
-    Corrections are then applied to obtain the single-sided spectrum.
-    
-    .. note:: Single-sided spectrum.
-    
-    """
-    #ir = ir - np.mean(ir) # Remove DC component.
-    
-    N = N if N else ir.shape[-1]
-    fr = rfft(ir, n=N) / N
-    f = np.fft.rfftfreq(N, 1.0/fs)    #/ 2.0
-    
-    fr *= 2.0
-    fr[..., 0] /= 2.0    # DC component should not be doubled.
-    if not N%2: # if not uneven
-        fr[..., -1] /= 2.0 # And neither should fs/2 be.
-    
-    #f = np.arange(0, N/2+1)*(fs/N)
-    
-    return f, fr
+        return fig
+        #plt.show()
     
 
 QUANTITIES = {
-    'p' : 'Pa',
-    'v' : 'm/s'
+    'pressure' : 'Pa',
+    'velocity' : 'm/s'
     }
