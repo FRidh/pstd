@@ -26,7 +26,7 @@ setup(
       packages=find_packages(),
       scripts=[],
       zip_safe=False,
-      classifiers=classifiers,
+      classifiers=CLASSIFIERS,
       install_requires=[
           'numpy',
           'scipy',
