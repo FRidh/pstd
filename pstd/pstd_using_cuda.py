@@ -124,7 +124,7 @@ def dict_device_to_host(d):
     #return p, v
 
  
-class PSTD_using_cuda(PSTD):
+class PSTD(PSTD):
     
     @property
     def precision(self):
@@ -304,14 +304,14 @@ class PSTD_using_cuda(PSTD):
         #data['temp']['fft_p'] = cuda.device_array(data['shape'], dtype=self.dtype)
 
         #cuda.select_device(0)
-        data = dict_host_to_device(data)   # Make data available on host
+        data = dict_host_to_device(data)   # Copy data from host to device
 
         return data
         
         
     def _post_run(self, data):
         
-        data = dict_device_to_host(data)   # Make results available on host.
+        data = dict_device_to_host(data)   # Copy results from device to host
         
         #cuda.close()
         

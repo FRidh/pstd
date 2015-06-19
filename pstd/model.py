@@ -170,15 +170,7 @@ class Axes(object, metaclass=abc.ABCMeta):
     def __iter__(self):
         for i in self.DIMENSIONS:
             yield getattr(self, i)
-    
-    @property
-    def ndim(self):
-        """
-        Number of dimensions.
-        
-        Alias for ``len(self)``.
-        """
-        return len(self)
+
     
 class Axes2D(Axes):
     """Axes for two-dimensional model.
@@ -195,23 +187,21 @@ class Axes3D(Axes):
 
 class Axis(object):
     """Axis of :class:`Model`.
+    
     """
 
     def __init__(self, axes, label, length=0.0):
         
         self.label = label
-        """
-        Label indicating which axis this is.
+        """Label indicating which axis this is.
         """
         
         self._axes = axes
-        """
-        Reference to instance of :class:`Axes`.
+        """Reference to instance of :class:`Axes`.
         """
         
         self.length_target = length
-        """
-        Target length of field along this axis.
+        """Target length of field along this axis.
         """
 
     @property
@@ -527,13 +517,12 @@ class PointSource(Source):
         
     @property
     def mass(self):
-        """
-        Mass contribution.
+        """Mass contribution.
         
         See :func:`mass`.
         """
         if self.quantity == 'pressure':
-            m = mass(self.amplitude, self._model.medium.soundspeed_mean, self._model.grid.spacing, self._model.ndim)
+            m = mass(self.amplitude, self._model.medium.soundspeed_mean, self._model.grid.spacing, self._model.ndimensions)
             try:
                 return float(m)
             except TypeError:
@@ -543,8 +532,7 @@ class PointSource(Source):
         
     @property  
     def force(self):
-        """
-        Force contribution. Returns a tuple where each element represents the component of the force in the respective dimension.
+        """Force contribution. Returns a tuple where each element represents the component of the force in the respective dimension.
         
         See :func:`force`.
         """
@@ -640,6 +628,9 @@ class Receiver(Transducer):
         """
         Record only the final value (True) or the impulse response (False).
         """
+        
+        if quantity is None:
+            raise ValueError("Invalid quantity. Cannot be None.")
         
         self.quantity = quantity
         """Quantity to record.
@@ -768,8 +759,7 @@ class Medium(object):
     
     @property
     def soundspeed_mean(self):
-        """
-        Mean soundspeed.
+        """Mean soundspeed.
         """
         return np.mean(self.soundspeed)
     
@@ -785,15 +775,16 @@ class Medium(object):
         .. warning:: 2D only.
         
         """
-        try:
-            n = len(self.soundspeed)
-        except TypeError:   # Single
+        # Single valued soundspeed.
+        if not isinstance(self.soundspeed, collections.Iterable):
             return self.soundspeed
         
-        if self._model is None:
+        elif self._model is None:
             raise ValueError("Cannot return value. Medium needs to be part of a Model.")
         
-        elif len(self.soundspeed) == 1 or self.soundspeed.shape == self._model.grid.shape: # Generally the case we have no PML.
+        # In case the soundspeed shape matches that of the grid. 
+        # Generally the case when have no PML.
+        elif len(self.soundspeed) == 1 or self.soundspeed.shape == self._model.grid.shape: 
             return self.soundspeed
         else:
             if not self.soundspeed.shape==self._model.grid.shape_without_pml:
@@ -1181,9 +1172,9 @@ class Model(object, metaclass=abc.ABCMeta):
 
     @property
     def objects(self):
-        """Object.
+        """_object.
         """
-        yield from (self.getObject(obj.name) for obj in self._objects)
+        yield from (self.get_object(obj.name) for obj in self._objects)
 
     @property
     def sources(self):
@@ -1197,7 +1188,7 @@ class Model(object, metaclass=abc.ABCMeta):
         """
         yield from (obj for obj in self.objects if isinstance(obj, Receiver))
 
-    def getObject(self, name):
+    def get_object(self, name):
         """Get object by name.
         
         :param name: Name of `object`.
@@ -1213,12 +1204,12 @@ class Model(object, metaclass=abc.ABCMeta):
         else:
             raise ValueError("Unknown name.")
     
-    def addObject(self, name, sort, position, **kwargs):
+    def add_object(self, name, sort, position, **kwargs):
         """Add object to model.
         """
         obj = objects_map[sort](weakref.proxy(self), name, position, **kwargs)
         self._objects.append(obj)
-        return self.getObject(obj.name)
+        return self.get_object(obj.name)
     
     #def addSource(self, name):
         #pass
@@ -1226,7 +1217,7 @@ class Model(object, metaclass=abc.ABCMeta):
     #def addReceiver(self, name):
         #pass
     
-    def removeObject(self, name):
+    def remove_object(self, name):
         """Delete object from model.
         
         :param name: Name of object.
@@ -1235,7 +1226,9 @@ class Model(object, metaclass=abc.ABCMeta):
         for obj in self.objects:
             if name == obj.name:
                 self._objects.remove(obj)
-    
+        else:
+            raise ValueError("Object with given name does not exist.")
+                
     @property
     def cfl(self):
         """Courant-Friedrichs-Lewy number. The CFL number can be calculated using :func:`cfl`.
@@ -1259,32 +1252,33 @@ class Model(object, metaclass=abc.ABCMeta):
                 return True
         except AttributeError:
             return True
-    
-    @property
-    def ndim(self):
-        """Amount of dimensions. This value is determined from the amount of axes.
-        """
-        return len(self.axes)
 
     _timestep = None
-
+    _cfl = None
+    
     @property
     def timestep(self):
         """Timestep.
         
-        .. math:: \\Delta t = \\frac{ \\mathrm{CFL} \\Delta x } {c_{max}}
+        .. math:: \\Delta t = \\frac{ \\mathrm{CFL} \\Delta x } {n_{dim} c_{max}}
         
         """
         if self._timestep:
             return self._timestep
         else:
-            return self.cfl * self.grid.spacing / float(np.max(self.medium.soundspeed))
+            return self.cfl * self.grid.spacing / float(np.max(self.medium.soundspeed)) / self.ndimensions
 
     @property
     def temporal_sample_frequency(self):
         """Temporal sample frequency in Hz. Inverse of :attr:`timestep`.
         """
         return 1.0 / self.timestep
+
+    @property
+    def ndimensions(self):
+        """Amount of dimensions in simulation.
+        """
+        return len(self.axes)
 
     #def _prepare_recorder(self):
         #"""Prepare recorder.
@@ -1386,6 +1380,7 @@ class Model(object, metaclass=abc.ABCMeta):
         """
         logging.info("Progress: Continuing simulation")
         
+        data['_t0'] = time.perf_counter()
         data['_t'] = time.perf_counter()   # Start timing
         
         return data
@@ -1393,7 +1388,8 @@ class Model(object, metaclass=abc.ABCMeta):
     def _post_run(self, data):
         """This method is run after every simulation run.
         """
-        logging.info('Progress: Done')
+        t = time.perf_counter() - data['_t0']
+        logging.info('Progress: Done. Run took {} seconds'.format(t))
         return data
         #if self.settings['recording']['use']:
             #self._file_handler[0].close()
@@ -1578,7 +1574,8 @@ class Model(object, metaclass=abc.ABCMeta):
         """
         Overview of settings.
         """
-        return ("Model timestep: {} \n".format(self.timestep) +
+        return ("CFL: {}\n".format(self.cfl) + 
+                "Model timestep: {} \n".format(self.timestep) +
                 "Maximum frequency: {:.1f}\n".format(self.maximum_frequency) +
                 "Sample frequency temporal: {:.1f}\n".format(self.temporal_sample_frequency) + 
                 "Sample frequency spatial: {:.1f}\n".format(self.grid.spatial_sample_frequency) + 
@@ -1798,18 +1795,34 @@ DEFAULT_SETTINGS = {
 Default settings.
 """
 
-def cfl(c_0, timestep, spacing):
-    """
-    Courant-Friedrichs-Lewy number.
+def cfl(soundspeed, timestep, spacing):
+    """Courant-Friedrichs-Lewy number.
     
-    :param c_0: Speed of sound :math:`c_0`.
+    :param soundspeed: Speed of sound :math:`c`.
     :param timestep: Time step :math:`\\Delta t`.
     :param spacing: Spatial resolution :math:`\\Delta x`.
     
-    .. math:: \\mathrm{CFL} = c_0 \\frac{\\Delta t}{\\Delta x}
+    The soundspeed and spacing can be vectors, with 
+    their size corresponding to the dimensions of the simulation.
+    
+    .. math:: \\mathrm{CFL} = \\Delta t \\sum_{i=0}^{n-1} \\frac{c_i}{\\Delta x_i}
     
     """
-    return c_0 * timestep / spacing
+    return np.sum(timestep * soundspeed / spacing, axis=-1)
+
+
+#def cfl2d(soundspeed, timestep, spacing):
+    #"""Courant-Friedrichs-Lewy number in two dimensions.
+    
+    #:param soundspeed: Speed of sound :math:`c_0`. Either a single number or a tuple (c_x, c_y)
+    #:param timestep: Time step :math:`\\Delta t`.
+    #:param spacing: Spatial resolution :math:`\\Delta x`.
+    
+    #.. math:: \\mathrm{CFL} = c_x \\frac{\\Delta t}{\\Delta x} + c_y \\frac{\\Delta t}{\\Delta x}
+    
+    #"""
+
+
 
 def wavenumbers(n, spacing):
     """
@@ -1861,11 +1874,11 @@ def circular_receiver_array(model, name, center, radius, n, quantities=None):
     cy = np.sin(angles) * radius + center.y
     
     for i, (px, py) in enumerate(zip(cx, cy)):
-        receivers.append(model.addObject(name+'_'+str(i), 'Receiver', Position2D(px, py), quantities=quantities))
+        receivers.append(model.add_object(name+'_'+str(i), 'Receiver', Position2D(px, py), quantities=quantities))
     
     return receivers
 
-def line_receiver_array(model, name, start, stop, n=None, spacing=None, quantities=None):
+def line_receiver_array(model, name, start, stop, n=None, spacing=None, quantity=None, component=None):
     """Create an array of receivers along a line. Returns a list of receivers.
     
     :param model: Model
@@ -1874,12 +1887,15 @@ def line_receiver_array(model, name, start, stop, n=None, spacing=None, quantiti
     :param n: Amount of receivers.
     :param spacing: Spacing between receivers.
     :param name: Base name of receivers. An integer is added to the base name.
-    :param quantities: List of quantities to record.
+    :param quantity: Quantity
+    :param component: Component of quantity.
     
     .. note:: 2D only.
     
     """
-    quantities = quantities if quantities else ['pressure']
+    start = Position2D(*start)
+    stop = Position2D(*stop)
+    quantity = quantity
     
     if spacing and n:
         raise ValueError("Either spacing or n should be given. Not both.")
@@ -1894,7 +1910,7 @@ def line_receiver_array(model, name, start, stop, n=None, spacing=None, quantiti
     cy = np.linspace(start.y, stop.y, n, endpoint=True)
     
     for i, (px, py) in enumerate(zip(cx, cy)):
-        receivers.append(model.addObject(name+'_'+str(i), 'Receiver', Position2D(px, py), quantities=quantities))
+        receivers.append(model.add_object(name+'_'+str(i), 'Receiver', position=(px, py), quantity=quantity, component=component))
     return receivers
     
 
@@ -1927,7 +1943,7 @@ def grid_receiver_array(model, name, center, x, y, n=None, spacing=None, quantit
     cy = np.arange(center.x-x/2.0, center.x+x/2.0, spacing) + spacing/2.0
 
     for i, (px, py) in enumerate(itertools.product(cx, cy)):
-        receivers.append(model.addObject(name+'_'+str(i), 'Receiver', Position2D(px, py), quantities=quantities))
+        receivers.append(model.add_object(name+'_'+str(i), 'Receiver', Position2D(px, py), quantities=quantities))
     return receivers
     
     
