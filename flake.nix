@@ -22,5 +22,13 @@
     };
 
     defaultPackage = packages.pstd;
+
+    # devShell = (pkgs.mkShell {
+    #   nativeBuildInputs = with packages.python3.pkgs; [ notebook ] ++ pstd.propagatedBuildInputs;
+
+    # });
+    devShell = (packages.python3.withPackages(ps: with ps; [
+      notebook
+    ] ++ pstd.propagatedBuildInputs)).env;
   });
 }
