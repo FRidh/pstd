@@ -44,3 +44,5 @@ _build
 *.bak
 
 *.png
+
+result*
