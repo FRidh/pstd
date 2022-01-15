@@ -1,0 +1,31 @@
+[build-system]
+requires = ["flit_core >=2,<4"]
+build-backend = "flit_core.buildapi"
+
+[tool.flit.metadata]
+module = "pstd"
+author = "Frederik Rietdijk"
+requires = [
+    "acoustics",
+    "numpy",
+    "scipy",
+    "matplotlib",
+    "numexpr",
+    "pyyaml",
+]
+[tool.tox]
+legacy_tox_ini = """
+[tox]
+envlist = py39, py310
+
+[gh-actions]
+python =
+    3.9: py39
+    3.10: py310
+
+[testenv]
+deps =
+    nbconvert
+    pytest    
+commands = pytest -k "not test_notebook" {posargs}
+"""
