@@ -1,6 +1,6 @@
 # pstd
 
-A Python implementation of the k-space pseudospectral time-domain method.
+A Python implementation of the $k$-space pseudospectral time-domain method.
 
 This implementation was originally written to quantify the fluctuations in sound pressure due to atmospheric turbulence.
 
@@ -11,19 +11,8 @@ Currently there are no packages available.
 
 The recommended method to install is to clone this repository
 
-`git clone git@github.com:FRidh/pstd.git`
+   pip install git+https://github.com/FRidh/seapy.git
 
-and install this package in development mode
-
-`python setup.py develop`
-
-This way one can easily update to the latest version using
-
-`git pull`
-
-and running again
-
-`python setup.py develop`
 
 ## Examples
 

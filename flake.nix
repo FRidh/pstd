@@ -1,34 +1,45 @@
 {
-  description = "PSTD";
+  description = "K-space PSTD for Python.";
 
-  inputs.nixpkgs.url = "github:nixos/nixpkgs?ref=nixpkgs-unstable";
-  inputs.flake-utils.url = "github:numtide/flake-utils";
+  inputs.nixpkgs.url = "nixpkgs/nixpkgs-unstable";
+  inputs.utils.url = "github:numtide/flake-utils";
 
-  outputs = { self, nixpkgs, flake-utils }: flake-utils.lib.eachDefaultSystem (system: let
-      pkgs = nixpkgs.legacyPackages.${system};
-  in rec {
-
-    packages = rec {
+  outputs = { self, nixpkgs, utils }: {
+    overlay = final: prev: {
+      pythonPackagesOverrides = (prev.pythonPackagesOverrides or []) ++ [
+        (self: super: {
+          pstd = self.callPackage ./. {};
+        })
+      ];
+      # Remove when https://github.com/NixOS/nixpkgs/pull/91850 is fixed.
       python3 = let
-        python = pkgs.python3;
-      in python.override {
-        packageOverrides = final: prev: {
-          pstd = final.callPackage ./default.nix {};
+        composeOverlays = nixpkgs.lib.foldl' nixpkgs.lib.composeExtensions (self: super: {});
+        self = prev.python3.override {
+          inherit self;
+          packageOverrides = composeOverlays final.pythonPackagesOverrides;
         };
-        self = python;
-      };
-
-      pstd = python3.pkgs.pstd;
+      in self;
     };
+  } // (utils.lib.eachSystem [ "x86_64-linux" ] (system: let
+    pkgs = (import nixpkgs {
+      inherit system;
+      overlays = [ self.overlay ];
+    });
+    python = pkgs.python3;
+    pstd = python.pkgs.pstd;
+    devEnv = python.withPackages(ps: with ps.pstd; nativeBuildInputs ++ propagatedBuildInputs);
+  in {
+    # Our own overlay does not get applied to nixpkgs because that would lead to
+    # an infinite recursion. Therefore, we need to import nixpkgs and apply it ourselves.
+    defaultPackage = pstd;
 
-    defaultPackage = packages.pstd;
-
-    # devShell = (pkgs.mkShell {
-    #   nativeBuildInputs = with packages.python3.pkgs; [ notebook ] ++ pstd.propagatedBuildInputs;
-
-    # });
-    devShell = (packages.python3.withPackages(ps: with ps; [
-      notebook
-    ] ++ pstd.propagatedBuildInputs)).env;
-  });
+    devShell = pkgs.mkShell {
+      nativeBuildInputs = [
+        devEnv
+      ];
+      shellHook = ''
+        export PYTHONPATH=$(readlink -f $(find . -maxdepth 1  -type d ) | tr '\n' ':'):$PYTHONPATH
+      '';
+    };
+  }));
 }
