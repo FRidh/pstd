@@ -16,6 +16,7 @@
 , pylint
 , pytest
 , pytestCheckHook
+, turbulence
 }:
 
 buildPythonPackage rec {
@@ -46,6 +47,7 @@ buildPythonPackage rec {
     pylint
     pytest
     pytestCheckHook
+    turbulence
   ];
 
   preCheck = ''

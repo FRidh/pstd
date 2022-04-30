@@ -1220,7 +1220,7 @@ class Model(object, metaclass=abc.ABCMeta):
         maximum_frequency,
         medium=None,
         pml=None,
-        cfl=0.05,
+        cfl=None,
         spacing=None,
         axes=None,
         size=None,
@@ -1347,10 +1347,16 @@ class Model(object, metaclass=abc.ABCMeta):
         return self._cfl
 
     @cfl.setter
-    def cfl(self, x):
-        if not x <= np.mean(self.medium.soundspeed) / np.max(self.medium.soundspeed):
+    def cfl(self, x=None):
+        if x is None:
+            x = self.maximum_cfl(self.medium.soundspeed)
+        if not x <= self.maximum_cfl(self.medium.soundspeed):
             raise ValueError("CFL too high.")
         self._cfl = x
+
+    @staticmethod
+    def maximum_cfl(soundspeed):
+        return np.mean(soundspeed) / np.max(soundspeed)
 
     @property
     def constant_field(self):

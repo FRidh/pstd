@@ -3,8 +3,9 @@
 
   inputs.nixpkgs.url = "nixpkgs/nixpkgs-unstable";
   inputs.utils.url = "github:numtide/flake-utils";
+  inputs.turbulence.url = "github:FRidh/turbulence";
 
-  outputs = { self, nixpkgs, utils }: {
+  outputs = { self, nixpkgs, utils, turbulence }: {
     overlay = final: prev: {
       pythonPackagesOverrides = (prev.pythonPackagesOverrides or []) ++ [
         (self: super: {
@@ -23,7 +24,7 @@
   } // (utils.lib.eachSystem [ "x86_64-linux" ] (system: let
     pkgs = (import nixpkgs {
       inherit system;
-      overlays = [ self.overlay ];
+      overlays = [ self.overlay turbulence.overlay ];
     });
     python = pkgs.python3;
     pstd = python.pkgs.pstd;
