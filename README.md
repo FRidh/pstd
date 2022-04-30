@@ -11,7 +11,7 @@ Currently there are no packages available.
 
 The recommended method to install is to clone this repository
 
-   pip install git+https://github.com/FRidh/seapy.git
+    pip install git+https://github.com/FRidh/pstd.git
 
 
 ## Examples
